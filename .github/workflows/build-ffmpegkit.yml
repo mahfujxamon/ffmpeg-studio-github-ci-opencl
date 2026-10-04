@@ -126,7 +126,7 @@ jobs:
 
 
       # ============================================================
-      # 7. VERIFY TOOLCHAIN (Updated without libtool check)
+      # 7. VERIFY TOOLCHAIN
       # ============================================================
       - name: Verify build toolchain
         run: |
@@ -307,7 +307,7 @@ jobs:
           addition = r'''
           CONFIGURE_POSTFIX+=" --enable-opencl"
           CONFIGURE_POSTFIX+=" --extra-cflags=-I${GITHUB_WORKSPACE}/opencl-headers"
-          CONFIGURE_POSTFIX+=" --extra-libs=${GITHUB_WORKSPACE}/icd-loader/build/libOpenCL.a -ldl"
+          CONFIGURE_POSTFIX+=" --extra-libs=\"-lOpenCL\""
           '''
 
           text = text.replace(
@@ -554,7 +554,7 @@ jobs:
           grep -n -i \
             'mediacodec' \
             build.log 2>/dev/null \
-            | tail -200 || true
+            | tail -300 || true
 
           echo
           echo "===== Last 300 build.log lines ====="
