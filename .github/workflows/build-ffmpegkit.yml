@@ -122,6 +122,55 @@ jobs:
           git clone --depth 1 --branch "${FFMPEGKIT_TAG}" \
             https://github.com/ffmpegkit-maintained/ffmpeg.git ffmpegkit
 
+      - name: Patch GnuTLS configure for modern Clang
+        run: |
+          set -eux
+
+          GNUTLS_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/gnutls.sh"
+
+          test -f "$GNUTLS_SCRIPT"
+
+          python3 - "$GNUTLS_SCRIPT" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+
+          marker = '''if [[ ! -f "${BASEDIR}"/src/"${LIB_NAME}"/configure ]] || [[ ${RECONF_gnutls} -eq 1 ]]; then
+            ./bootstrap --skip-po || return 1
+            git submodule update --remote gnulib || return 1
+            overwrite_file ./gnulib/lib/fpending.c ./src/gl/fpending.c || return 1
+          fi
+          '''
+
+          patch = marker + r'''
+          # FIX OLD AUTOCONF sizeof(TYPE) PROBES FOR MODERN CLANG
+          if [[ -f "${BASEDIR}"/src/"${LIB_NAME}"/configure ]]; then
+            ${SED_INLINE} \
+              's/if (sizeof ((pid_t)))/if (sizeof (pid_t))/g' \
+              "${BASEDIR}"/src/"${LIB_NAME}"/configure || return 1
+
+            ${SED_INLINE} \
+              's/if (sizeof ((mode_t)))/if (sizeof (mode_t))/g' \
+              "${BASEDIR}"/src/"${LIB_NAME}"/configure || return 1
+          fi
+          '''
+
+          if 'FIX OLD AUTOCONF sizeof(TYPE) PROBES FOR MODERN CLANG' in text:
+              print("GnuTLS patch already present")
+              sys.exit(0)
+
+          if marker not in text:
+              print("ERROR: expected GnuTLS configure block not found")
+              sys.exit(1)
+
+          path.write_text(text.replace(marker, patch))
+          print("GnuTLS patch applied")
+          PY
+
+          grep -n "FIX OLD AUTOCONF sizeof(TYPE)" "$GNUTLS_SCRIPT"
+
       - name: Add OpenCL headers
         if: ${{ hashFiles('patches/ffmpeg-opencl-runtime.patch') != '' }}
         run: |
