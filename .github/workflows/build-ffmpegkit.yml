@@ -62,22 +62,38 @@ jobs:
           mkdir -p ffmpegkit/third_party/opencl
           cp -R opencl-headers/CL ffmpegkit/third_party/opencl/include/
 
-      - name: Apply OpenCL runtime patch
+      - name: Inspect FFmpegKit source tree
         run: |
-          set -euo pipefail
+          set -eux
+          echo "=== ffmpegkit root ==="
+          pwd
+          ls -la ffmpegkit
 
-          cd ffmpegkit
+          echo "=== android-8.1-lts ==="
+          find ffmpegkit/android-8.1-lts -maxdepth 3 -type f | head -100
 
-          echo "Checking FFmpegKit source layout..."
-          test -f configure
-          test -f libavfilter/opencl.c
-          test -f libavfilter/opencl.h
-          test -f libavutil/hwcontext_opencl.c
-          test -f libavutil/Makefile
+          echo "=== configure files ==="
+          find ffmpegkit -type f -name configure -print
 
-          echo "FFmpeg source layout: OK"
+          echo "=== FFmpeg source directories ==="
+          find ffmpegkit -type d \( -name libavutil -o -name libavfilter \) -print
 
-          git apply "../patches/ffmpeg-opencl-runtime.patch"
+#      - name: Apply OpenCL runtime patch
+#        run: |
+#          set -euo pipefail
+#
+#          cd ffmpegkit
+#
+#          echo "Checking FFmpegKit source layout..."
+#          test -f configure
+#          test -f libavfilter/opencl.c
+#          test -f libavfilter/opencl.h
+#          test -f libavutil/hwcontext_opencl.c
+#          test -f libavutil/Makefile
+#
+#          echo "FFmpeg source layout: OK"
+#
+#          git apply "../patches/ffmpeg-opencl-runtime.patch"
 
       - name: Build arm64-v8a FFmpegKit AAR
         env:
