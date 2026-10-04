@@ -204,6 +204,39 @@ jobs:
           echo "=== FFmpeg source directories ==="
           find ffmpegkit -type d \( -name libavutil -o -name libavfilter \) -print
 
+      - name: Disable OpenSSL in Android FFmpeg configure
+        run: |
+          set -eux
+
+          FFMPEG_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/ffmpeg.sh"
+          test -f "$FFMPEG_SCRIPT"
+
+          python3 - "$FFMPEG_SCRIPT" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+
+          old = 'CONFIGURE_POSTFIX+=" --enable-openssl"'
+
+          if old not in text:
+              print("OpenSSL enable line not found; checking current state...")
+          else:
+              text = text.replace(
+                  old,
+                  '# OpenSSL disabled: GnuTLS is used instead',
+                  1
+              )
+              path.write_text(text)
+              print("OpenSSL disabled in Android FFmpeg configure")
+
+          PY
+
+          echo "=== SSL configuration lines ==="
+          grep -n -E 'enable-gnutls|enable-openssl|disable-openssl' \
+            "$FFMPEG_SCRIPT" || true
+
       - name: Verify FFmpeg SSL configuration
         run: |
           set -eux
@@ -229,7 +262,6 @@ jobs:
             --full \
             --enable-gpl \
             --enable-android-media-codec \
-            --disable-openssl \
             --disable-arm-v7a \
             --disable-arm-v7a-neon \
             --disable-x86 \
