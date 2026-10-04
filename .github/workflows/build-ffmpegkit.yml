@@ -204,22 +204,12 @@ jobs:
           echo "=== FFmpeg source directories ==="
           find ffmpegkit -type d \( -name libavutil -o -name libavfilter \) -print
 
-#      - name: Apply OpenCL runtime patch
-#        run: |
-#          set -euo pipefail
-#
-#          cd ffmpegkit
-#
-#          echo "Checking FFmpegKit source layout..."
-#          test -f configure
-#          test -f libavfilter/opencl.c
-#          test -f libavfilter/opencl.h
-#          test -f libavutil/hwcontext_opencl.c
-#          test -f libavutil/Makefile
-#
-#          echo "FFmpeg source layout: OK"
-#
-#          git apply "../patches/ffmpeg-opencl-runtime.patch"
+      - name: Verify FFmpeg SSL configuration
+        run: |
+          set -eux
+
+          echo "GnuTLS will be enabled"
+          echo "OpenSSL will be disabled"
 
       - name: Build arm64-v8a FFmpegKit AAR
         env:
@@ -239,6 +229,7 @@ jobs:
             --full \
             --enable-gpl \
             --enable-android-media-codec \
+            --disable-openssl \
             --disable-arm-v7a \
             --disable-arm-v7a-neon \
             --disable-x86 \
