@@ -261,19 +261,8 @@ jobs:
 
           echo "=== OpenCL loader artifacts ==="
 
-          find \
-            icd-loader/build \
-            -type f \
-            \( \
-              -name 'libOpenCL.a' \
-              -o \
-              -name 'OpenCL.a' \
-            \) \
-            -print
-
           LOADER_A="$(
-            find \
-              icd-loader/build \
+            find icd-loader/build \
               -type f \
               -name 'libOpenCL.a' \
               | head -n 1
@@ -282,17 +271,11 @@ jobs:
           test -n "$LOADER_A"
           test -f "$LOADER_A"
 
-          cp \
-            "$LOADER_A" \
-            icd-loader/build/libOpenCL.a
-
           echo "=== Final static loader ==="
+          file "$LOADER_A"
+          ls -lh "$LOADER_A"
 
-          file \
-            icd-loader/build/libOpenCL.a
-
-          ls -lh \
-            icd-loader/build/libOpenCL.a
+          echo "OPENCL_LOADER_A=$LOADER_A" >> "$GITHUB_ENV"
 
 
       # ============================================================
