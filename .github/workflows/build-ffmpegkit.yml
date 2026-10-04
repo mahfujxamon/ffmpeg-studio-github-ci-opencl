@@ -72,10 +72,26 @@ jobs:
             ragel \
             groff \
             gtk-doc-tools \
+            libtasn1-bin \
+            libtasn1-6-dev \
             make \
             unzip \
             python3 \
             perl
+
+      - name: Verify GnuTLS ASN.1 tools
+        run: |
+          set -eux
+
+          echo "=== ASN.1 parser ==="
+          command -v asn1Parser
+          asn1Parser --help >/dev/null 2>&1 || true
+
+          echo "=== libtasn1 packages ==="
+          dpkg -l | grep -E 'libtasn1-(bin|6-dev)' || true
+
+          echo "=== asn1Parser location ==="
+          ls -l "$(command -v asn1Parser)"
 
       - name: Verify build toolchain
         run: |
@@ -129,17 +145,41 @@ jobs:
           GNUTLS_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/gnutls.sh"
           test -f "$GNUTLS_SCRIPT"
 
-          echo "=== GnuTLS script ==="
-          sed -n '1,240p' "$GNUTLS_SCRIPT"
+          python3 - "$GNUTLS_SCRIPT" <<'PY'
+          from pathlib import Path
+          import sys
 
-          echo
-          echo "=== Searching configure/build commands ==="
-          grep -n -E \
-            'configure|CFLAGS|CPPFLAGS|CXXFLAGS|gnutls' \
-            "$GNUTLS_SCRIPT" || true
+          path = Path(sys.argv[1])
+          text = path.read_text()
 
-          echo
-          echo "GnuTLS script inspection complete."
+          marker = 'PATCH_GNUTLS_ANDROID_CLANG_FLAGS'
+
+          if marker in text:
+              print("GnuTLS Android Clang patch already installed")
+              sys.exit(0)
+
+          # Insert immediately after the GnuTLS script variables/functions are loaded.
+          anchor = 'if [[ ! -f "${BASEDIR}"/src/"${LIB_NAME}"/configure ]]'
+
+          if anchor not in text:
+              print("ERROR: configure anchor not found")
+              sys.exit(1)
+
+          patch = r'''
+          # PATCH_GNUTLS_ANDROID_CLANG_FLAGS
+          # Fix for modern Android NDK 27 Clang which treats these warnings as errors
+          export CFLAGS="${CFLAGS:-} -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=deprecated-non-prototype"
+          
+          '''
+          
+          # anchor-er thik age patch bosiye dibo
+          text = text.replace(anchor, patch + anchor, 1)
+
+          path.write_text(text)
+          print("GnuTLS Android Clang compatibility patch installed")
+          PY
+
+          grep -n -B2 -A5 "PATCH_GNUTLS_ANDROID_CLANG_FLAGS" "$GNUTLS_SCRIPT"
 
       - name: Add OpenCL headers
         if: ${{ hashFiles('patches/ffmpeg-opencl-runtime.patch') != '' }}
