@@ -127,6 +127,7 @@ jobs:
           set -eux
 
           GNUTLS_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/gnutls.sh"
+
           test -f "$GNUTLS_SCRIPT"
 
           python3 - "$GNUTLS_SCRIPT" <<'PY'
@@ -146,33 +147,13 @@ jobs:
           patch = marker + r'''
           # FIX OLD AUTOCONF sizeof(TYPE) PROBES FOR MODERN CLANG
           if [[ -f "${BASEDIR}"/src/"${LIB_NAME}"/configure ]]; then
-            python3 - "${BASEDIR}/src/${LIB_NAME}/configure" <<'PYFIX'
-          from pathlib import Path
-          import re
-          import sys
+            ${SED_INLINE} \
+              's/if (sizeof ((pid_t)))/if (sizeof (pid_t))/g' \
+              "${BASEDIR}"/src/"${LIB_NAME}"/configure || return 1
 
-          cfg = Path(sys.argv[1])
-          data = cfg.read_text()
-
-          # Autoconf/Gnulib generated invalid C such as:
-          #   sizeof ((pid_t))
-          # Modern Clang rejects this as "expected expression".
-          #
-          # Normalize every sizeof ((TYPE)) occurrence to sizeof (TYPE).
-          fixed, count = re.subn(
-              r'(?<![A-Za-z0-9_])sizeof\s*\(\s*\(\s*([^)]+?)\s*\)\s*\)',
-              r'sizeof (\1)',
-              data,
-          )
-
-          cfg.write_text(fixed)
-
-          print(f"Fixed malformed sizeof probes: {count}")
-
-          if re.search(r'\bsizeof\s*\(\s*\(', fixed):
-              print("ERROR: malformed sizeof ((...)) still remains")
-              sys.exit(1)
-          PYFIX
+            ${SED_INLINE} \
+              's/if (sizeof ((mode_t)))/if (sizeof (mode_t))/g' \
+              "${BASEDIR}"/src/"${LIB_NAME}"/configure || return 1
           fi
           '''
 
@@ -185,7 +166,7 @@ jobs:
               sys.exit(1)
 
           path.write_text(text.replace(marker, patch))
-          print("GnuTLS generic sizeof patch installed")
+          print("GnuTLS patch applied")
           PY
 
           grep -n "FIX OLD AUTOCONF sizeof(TYPE)" "$GNUTLS_SCRIPT"
@@ -234,9 +215,17 @@ jobs:
         run: |
           set -eux
 
-          find ffmpegkit -path '*gnutls*/configure' -type f -print || true
+          echo "=== Searching GnuTLS 3.7.9 ==="
+          find ffmpegkit -type f -path '*gnutls*' \
+            \( -name configure -o -name config.log \) -print | head -100
 
-          grep -R -n -F 'sizeof ((' ffmpegkit 2>/dev/null | head -50 || true
+          echo "=== Searching pid_t configure test ==="
+          grep -R -n -F 'if (sizeof ((pid_t)))' \
+            ffmpegkit 2>/dev/null | head -50 || true
+
+          echo "=== Searching mode_t configure test ==="
+          grep -R -n -F 'if (sizeof ((mode_t)))' \
+            ffmpegkit 2>/dev/null | head -50 || true
 
       - name: Build arm64-v8a FFmpegKit AAR
         env:
