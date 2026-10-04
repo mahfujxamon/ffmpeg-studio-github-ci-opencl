@@ -1,0 +1,149 @@
+name: Build custom FFmpegKit AAR
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FFMPEGKIT_TAG: v8.1.9-lts-android
+  ANDROID_NDK_VERSION: 27.2.12479018
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK/NDK
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Install FFmpegKit host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf automake libtool texinfo pkg-config \
+            yasm nasm cmake make gcc g++ git wget curl unzip \
+            python3 perl
+
+      - name: Clone pinned FFmpegKit source
+        run: |
+          git clone --depth 1 --branch "${FFMPEGKIT_TAG}" \
+            https://github.com/ffmpegkit-maintained/ffmpeg.git ffmpegkit
+
+      - name: Add OpenCL headers
+        if: ${{ hashFiles('patches/ffmpeg-opencl-runtime.patch') != '' }}
+        run: |
+          git clone --depth 1 https://github.com/KhronosGroup/OpenCL-Headers.git opencl-headers
+          mkdir -p ffmpegkit/third_party/opencl
+          cp -R opencl-headers/CL ffmpegkit/third_party/opencl/include/
+
+      - name: Apply OpenCL runtime patch
+        run: |
+          cd ffmpegkit
+          # The patch contains the loader implementation and FFmpeg integration.
+          git apply "../patches/ffmpeg-opencl-runtime.patch"
+          # Remove the stale auxiliary-patch invocation carried by the historical patch.
+          python3 -c 'from pathlib import Path; p=Path("android-8.1-lts/scripts/android/ffmpeg.sh"); s=p.read_text(); block="""if [[ \"${FFMPEGKIT_OPENCL:-0}\" == \"1\" ]]; then\n  rm -f libavutil/opencl_loader.c libavutil/opencl_loader.h\n  git apply \"${BASEDIR}/tools/opencl/libavutil-opencl-loader.patch\" 1>>\"${BASEDIR}\"/build.log 2>&1 || return 1\nfi\n\n"""; assert block in s, "stale auxiliary OpenCL patch block not found"; p.write_text(s.replace(block,"",1))'
+
+
+      - name: Build arm64-v8a FFmpegKit AAR
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.ANDROID_NDK_VERSION }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.ANDROID_NDK_VERSION }}
+          FFMPEGKIT_OPENCL: '1'
+        run: |
+          cd ffmpegkit/android-8.1-lts
+          chmod +x android.sh
+          ./android.sh \
+            --lts \
+            --full \
+            --enable-gpl \
+            --enable-android-media-codec \
+            --disable-arm-v7a \
+            --disable-arm-v7a-neon \
+            --disable-x86 \
+            --disable-x86-64 \
+            --no-output-redirection
+
+      - name: Locate custom AAR
+        run: |
+          set -eux
+          AAR="$(find ffmpegkit/android-8.1-lts/prebuilt -type f -name 'ffmpeg-kit.aar' | head -n 1)"
+          test -n "$AAR"
+          mkdir -p app/libs
+          cp "$AAR" app/libs/ffmpeg-kit.aar
+          echo "AAR=$AAR"
+
+      - name: Verify AAR OpenCL/MediaCodec libraries and 16 KB alignment
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/aar-check
+          mkdir -p /tmp/aar-check
+          unzip -q app/libs/ffmpeg-kit.aar 'jni/*' -d /tmp/aar-check
+          test -d /tmp/aar-check/jni/arm64-v8a
+
+          found=0
+          while IFS= read -r so; do
+            found=1
+            echo "Checking $so"
+            aligns="$(readelf -lW "$so" | awk '$1=="LOAD" {print $NF}')"
+            test -n "$aligns"
+            while IFS= read -r align; do
+              case "$align" in
+                0x4000|0x8000|0x10000|0x20000|0x40000|0x80000|0x100000) ;;
+                *) echo "ERROR: $so has LOAD alignment $align (< 16 KB)"; exit 1 ;;
+              esac
+            done <<< "$aligns"
+          done < <(find /tmp/aar-check/jni/arm64-v8a -name '*.so' -type f)
+          test "$found" -eq 1
+
+          echo "16 KB ELF alignment check: PASS"
+
+      - name: Build Android app against custom AAR
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Upload custom AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-kit-custom-aar
+          path: app/libs/ffmpeg-kit.aar
+          if-no-files-found: error
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-studio-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload FFmpegKit build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpegkit-build-log
+          path: |
+            ffmpegkit/android-8.1-lts/build.log
+            ffmpegkit/android-8.1-lts/**/*.log
+          if-no-files-found: ignore

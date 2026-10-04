@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Clapperboard / Video Frame Base -->
+    <path
+        android:pathData="M30,38 C30,34.7 32.7,32 36,32 L72,32 C75.3,32 78,34.7 78,38 L78,70 C78,73.3 75.3,76 72,76 L36,76 C32.7,76 30,73.3 30,70 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="30"
+                android:startY="32"
+                android:endX="78"
+                android:endY="76"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#2A2F45" />
+                <item android:offset="1.0" android:color="#171926" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Top Clapper Header -->
+    <path
+        android:pathData="M30,38 C30,34.7 32.7,32 36,32 L72,32 C75.3,32 78,34.7 78,38 L78,44 L30,44 Z"
+        android:fillColor="#00F0FF" />
+
+    <!-- Clapper Chevron Stripes -->
+    <path
+        android:pathData="M40,32 L46,32 L38,44 L32,44 Z M52,32 L58,32 L50,44 L44,44 Z M64,32 L70,32 L62,44 L56,44 Z M76,32 L78,32 L78,35 L72,44 L68,44 Z"
+        android:fillColor="#0D1117" />
+
+    <!-- Terminal Command prompt indicator in top corner -->
+    <path
+        android:pathData="M34,49 L37,51 L34,53"
+        android:strokeWidth="1.2"
+        android:strokeColor="#00F0FF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M39,53 L43,53"
+        android:strokeWidth="1.2"
+        android:strokeColor="#00F0FF"
+        android:strokeLineCap="round" />
+
+    <!-- Central Glowing Play Triangle -->
+    <path android:pathData="M49,50 L63,58 L49,66 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="49"
+                android:startY="50"
+                android:endX="63"
+                android:endY="66"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#00F0FF" />
+                <item android:offset="1.0" android:color="#A855F7" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Bottom Audio / Frequency wave bars -->
+    <path
+        android:pathData="M35,70 L35,67 M40,70 L40,64 M45,70 L45,62 M50,70 L50,65 M55,70 L55,63 M60,70 L60,66 M65,70 L65,64 M70,70 L70,68"
+        android:strokeWidth="1.6"
+        android:strokeColor="#A855F7"
+        android:strokeLineCap="round" />
+
+</vector>

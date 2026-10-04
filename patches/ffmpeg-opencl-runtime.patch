@@ -1,0 +1,411 @@
+diff --git a/android-8.1-lts/scripts/android/ffmpeg.sh b/android-8.1-lts/scripts/android/ffmpeg.sh
+index 36026fa..aeafd60 100755
+--- a/android-8.1-lts/scripts/android/ffmpeg.sh
++++ b/android-8.1-lts/scripts/android/ffmpeg.sh
+@@ -67,6 +67,16 @@ esac
+ 
+ CONFIGURE_POSTFIX=""
+ HIGH_PRIORITY_INCLUDES=""
++OPENCL_EXTRA_LIBS=""
++
++# Android OpenCL runtime-loader build. The Khronos headers are bundled in the
++# repository; no vendor libOpenCL.so is linked into FFmpeg.
++if [[ "${FFMPEGKIT_OPENCL:-0}" == "1" ]]; then
++  OPENCL_INCLUDE_DIR="${BASEDIR}/../third_party/opencl/include"
++  CFLAGS+=" -I${OPENCL_INCLUDE_DIR}"
++  OPENCL_EXTRA_LIBS="-ldl"
++  CONFIGURE_POSTFIX+=" --enable-opencl"
++fi
+ 
+ # SET CONFIGURE OPTIONS
+ for library in {0..61}; do
+@@ -405,6 +415,11 @@ git checkout libavformat/file.c 1>>"${BASEDIR}"/build.log 2>&1
+ git checkout libavformat/protocols.c 1>>"${BASEDIR}"/build.log 2>&1
+ git checkout libavutil 1>>"${BASEDIR}"/build.log 2>&1
+ 
++if [[ "${FFMPEGKIT_OPENCL:-0}" == "1" ]]; then
++  rm -f libavutil/opencl_loader.c libavutil/opencl_loader.h
++  git apply "${BASEDIR}/tools/opencl/libavutil-opencl-loader.patch" 1>>"${BASEDIR}"/build.log 2>&1 || return 1
++fi
++
+ # 1. Use thread local log levels
+ ${SED_INLINE} 's/static int av_log_level/__thread int av_log_level/g' "${BASEDIR}"/src/"${LIB_NAME}"/libavutil/log.c 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+ 
+@@ -439,7 +454,7 @@ fi
+   --ranlib="${RANLIB}" \
+   --strip="${STRIP}" \
+   --nm="${NM}" \
+-  --extra-libs="$(pkg-config --libs --static cpu-features)" \
++  --extra-libs="$(pkg-config --libs --static cpu-features) ${OPENCL_EXTRA_LIBS}" \
+   --disable-autodetect \
+   --enable-cross-compile \
+   --enable-pic \
+diff --git a/src/ffmpeg/configure b/src/ffmpeg/configure
+index 86a2437..fcdbf30 100755
+--- a/src/ffmpeg/configure
++++ b/src/ffmpeg/configure
+@@ -7476,10 +7476,16 @@ enabled openal            && { check_pkg_config openal "openal >= 1.1" "AL/al.h"
+                                die "ERROR: openal not found"; } &&
+                              { test_cpp_condition "AL/al.h" "defined(AL_VERSION_1_1)" ||
+                                die "ERROR: openal must be installed and version must be 1.1 or compatible"; }
+-enabled opencl            && { check_pkg_config opencl OpenCL CL/cl.h clEnqueueNDRangeKernel ||
+-                               check_lib opencl OpenCL/cl.h clEnqueueNDRangeKernel "-framework OpenCL" ||
+-                               check_lib opencl CL/cl.h clEnqueueNDRangeKernel -lOpenCL ||
+-                               die "ERROR: opencl not found"; } &&
++enabled opencl            && {
++                               if enabled android; then
++                                 true
++                               else
++                                 check_pkg_config opencl OpenCL CL/cl.h clEnqueueNDRangeKernel ||
++                                 check_lib opencl OpenCL/cl.h clEnqueueNDRangeKernel "-framework OpenCL" ||
++                                 check_lib opencl CL/cl.h clEnqueueNDRangeKernel -lOpenCL ||
++                                 die "ERROR: opencl not found"
++                               fi
++                             } &&
+                              { test_cpp_condition "OpenCL/cl.h" "defined(CL_VERSION_1_2)" ||
+                                test_cpp_condition "CL/cl.h" "defined(CL_VERSION_1_2)" ||
+                                die "ERROR: opencl must be installed and version must be 1.2 or compatible"; }
+diff --git a/src/ffmpeg/libavfilter/opencl.c b/src/ffmpeg/libavfilter/opencl.c
+index e91610a..46a7e5e 100644
+--- a/src/ffmpeg/libavfilter/opencl.c
++++ b/src/ffmpeg/libavfilter/opencl.c
+@@ -134,6 +134,9 @@ fail:
+ 
+ int ff_opencl_filter_init(AVFilterContext *avctx)
+ {
++    if (ff_opencl_loader_init() < 0)
++        return AVERROR(ENODEV);
++
+     OpenCLFilterContext *ctx = avctx->priv;
+ 
+     ctx->output_format = AV_PIX_FMT_NONE;
+diff --git a/src/ffmpeg/libavfilter/opencl.h b/src/ffmpeg/libavfilter/opencl.h
+index dec3767..492d37e 100644
+--- a/src/ffmpeg/libavfilter/opencl.h
++++ b/src/ffmpeg/libavfilter/opencl.h
+@@ -29,6 +29,7 @@
+ #include "libavutil/buffer.h"
+ #include "libavutil/hwcontext.h"
+ #include "libavutil/hwcontext_opencl.h"
++#include "libavutil/opencl_loader.h"
+ #include "libavutil/pixfmt.h"
+ 
+ #include "avfilter.h"
+diff --git a/src/ffmpeg/libavutil/Makefile b/src/ffmpeg/libavutil/Makefile
+index c524189..7d3be6e 100644
+--- a/src/ffmpeg/libavutil/Makefile
++++ b/src/ffmpeg/libavutil/Makefile
+@@ -212,7 +212,7 @@ OBJS-$(CONFIG_LIBDRM)                   += hwcontext_drm.o
+ OBJS-$(CONFIG_MACOS_KPERF)              += macos_kperf.o
+ OBJS-$(CONFIG_MEDIACODEC)               += hwcontext_mediacodec.o
+ OBJS-$(CONFIG_OHCODEC)                  += hwcontext_oh.o
+-OBJS-$(CONFIG_OPENCL)                   += hwcontext_opencl.o
++OBJS-$(CONFIG_OPENCL)                   += hwcontext_opencl.o opencl_loader.o
+ OBJS-$(CONFIG_QSV)                      += hwcontext_qsv.o
+ OBJS-$(CONFIG_VAAPI)                    += hwcontext_vaapi.o
+ OBJS-$(CONFIG_VIDEOTOOLBOX)             += hwcontext_videotoolbox.o
+diff --git a/src/ffmpeg/libavutil/hwcontext_opencl.c b/src/ffmpeg/libavutil/hwcontext_opencl.c
+index 03f4623..faa6412 100644
+--- a/src/ffmpeg/libavutil/hwcontext_opencl.c
++++ b/src/ffmpeg/libavutil/hwcontext_opencl.c
+@@ -28,6 +28,7 @@
+ #include "hwcontext.h"
+ #include "hwcontext_internal.h"
+ #include "hwcontext_opencl.h"
++#include "opencl_loader.h"
+ #include "mem.h"
+ #include "pixdesc.h"
+ 
+@@ -641,6 +642,11 @@ fail:
+ static int opencl_device_create(AVHWDeviceContext *hwdev, const char *device,
+                                 AVDictionary *opts, int flags)
+ {
++    if (ff_opencl_loader_init() < 0) {
++        av_log(hwdev, AV_LOG_ERROR, "OpenCL runtime library is unavailable.\n");
++        return AVERROR(ENODEV);
++    }
++
+     OpenCLDeviceSelector selector = {
+         .context = opts,
+         .enumerate_platforms = &opencl_enumerate_platforms,
+diff --git a/src/ffmpeg/libavutil/opencl_loader.c b/src/ffmpeg/libavutil/opencl_loader.c
+new file mode 100644
+index 0000000..407399d
+--- /dev/null
++++ b/src/ffmpeg/libavutil/opencl_loader.c
+@@ -0,0 +1,156 @@
++/*
++ * Optional Android OpenCL runtime loader.
++ *
++ * This deliberately does NOT ship or link a vendor OpenCL implementation.
++ * It asks Android's linker to resolve libOpenCL.so in the app's permitted
++ * linker namespace and then resolves the OpenCL 1.2 core entry points with
++ * dlsym(). If the library or any required symbol is unavailable, OpenCL is
++ * considered unavailable and FFmpeg can fall back to another pipeline.
++ */
++#define CL_TARGET_OPENCL_VERSION 120
++#define CL_USE_DEPRECATED_OPENCL_1_2_APIS
++#include <CL/cl.h>
++
++#include <dlfcn.h>
++#include <pthread.h>
++#include <stddef.h>
++
++#define DEFINE_OPENCL_PTR(name) \
++    __attribute__((visibility("default"))) __typeof__(&name) ff_opencl_##name = NULL
++
++DEFINE_OPENCL_PTR(clBuildProgram);
++DEFINE_OPENCL_PTR(clCreateBuffer);
++DEFINE_OPENCL_PTR(clCreateCommandQueue);
++DEFINE_OPENCL_PTR(clCreateContext);
++DEFINE_OPENCL_PTR(clCreateImage);
++DEFINE_OPENCL_PTR(clCreateKernel);
++DEFINE_OPENCL_PTR(clCreateProgramWithSource);
++DEFINE_OPENCL_PTR(clCreateSubBuffer);
++DEFINE_OPENCL_PTR(clEnqueueCopyImage);
++DEFINE_OPENCL_PTR(clEnqueueFillBuffer);
++DEFINE_OPENCL_PTR(clEnqueueMapBuffer);
++DEFINE_OPENCL_PTR(clEnqueueMapImage);
++DEFINE_OPENCL_PTR(clEnqueueNDRangeKernel);
++DEFINE_OPENCL_PTR(clEnqueueReadBuffer);
++DEFINE_OPENCL_PTR(clEnqueueReadImage);
++DEFINE_OPENCL_PTR(clEnqueueUnmapMemObject);
++DEFINE_OPENCL_PTR(clEnqueueWriteBuffer);
++DEFINE_OPENCL_PTR(clEnqueueWriteImage);
++DEFINE_OPENCL_PTR(clFinish);
++DEFINE_OPENCL_PTR(clFlush);
++DEFINE_OPENCL_PTR(clGetContextInfo);
++DEFINE_OPENCL_PTR(clGetDeviceIDs);
++DEFINE_OPENCL_PTR(clGetDeviceInfo);
++DEFINE_OPENCL_PTR(clGetEventProfilingInfo);
++DEFINE_OPENCL_PTR(clGetExtensionFunctionAddressForPlatform);
++DEFINE_OPENCL_PTR(clGetImageInfo);
++DEFINE_OPENCL_PTR(clGetMemObjectInfo);
++DEFINE_OPENCL_PTR(clGetPlatformIDs);
++DEFINE_OPENCL_PTR(clGetPlatformInfo);
++DEFINE_OPENCL_PTR(clGetProgramBuildInfo);
++DEFINE_OPENCL_PTR(clGetSupportedImageFormats);
++DEFINE_OPENCL_PTR(clReleaseCommandQueue);
++DEFINE_OPENCL_PTR(clReleaseContext);
++DEFINE_OPENCL_PTR(clReleaseEvent);
++DEFINE_OPENCL_PTR(clReleaseKernel);
++DEFINE_OPENCL_PTR(clReleaseMemObject);
++DEFINE_OPENCL_PTR(clReleaseProgram);
++DEFINE_OPENCL_PTR(clRetainCommandQueue);
++DEFINE_OPENCL_PTR(clSetKernelArg);
++DEFINE_OPENCL_PTR(clWaitForEvents);
++
++static void *opencl_handle;
++static int opencl_load_result = -1;
++static pthread_once_t opencl_once = PTHREAD_ONCE_INIT;
++
++static void *opencl_dlopen(void)
++{
++    /* Try the linker-namespace-visible soname first. This is the important
++     * path on Android: an absolute vendor path may be blocked by namespaces. */
++    static const char *const candidates[] = {
++        "libOpenCL.so",
++        "/vendor/lib64/libOpenCL.so",
++        "/vendor/lib64/egl/libOpenCL.so",
++        "/system/vendor/lib64/libOpenCL.so",
++        "/system/vendor/lib64/egl/libOpenCL.so",
++        "/odm/lib64/libOpenCL.so",
++        "/odm/lib64/egl/libOpenCL.so",
++        "/vendor/lib/libOpenCL.so",
++        "/vendor/lib/egl/libOpenCL.so",
++        "/system/vendor/lib/libOpenCL.so",
++        "/system/vendor/lib/egl/libOpenCL.so",
++        "/odm/lib/libOpenCL.so",
++        "/odm/lib/egl/libOpenCL.so",
++    };
++
++    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
++        void *h = dlopen(candidates[i], RTLD_NOW | RTLD_LOCAL);
++        if (h)
++            return h;
++    }
++
++    return NULL;
++}
++
++#define LOAD_OPENCL_SYMBOL(name) \
++    do { \
++        *(void **)(&ff_opencl_##name) = dlsym(opencl_handle, #name); \
++        if (!ff_opencl_##name) \
++            return; \
++    } while (0)
++
++static void opencl_load_once(void)
++{
++    opencl_handle = opencl_dlopen();
++    if (!opencl_handle)
++        return;
++
++    LOAD_OPENCL_SYMBOL(clBuildProgram);
++    LOAD_OPENCL_SYMBOL(clCreateBuffer);
++    LOAD_OPENCL_SYMBOL(clCreateCommandQueue);
++    LOAD_OPENCL_SYMBOL(clCreateContext);
++    LOAD_OPENCL_SYMBOL(clCreateImage);
++    LOAD_OPENCL_SYMBOL(clCreateKernel);
++    LOAD_OPENCL_SYMBOL(clCreateProgramWithSource);
++    LOAD_OPENCL_SYMBOL(clCreateSubBuffer);
++    LOAD_OPENCL_SYMBOL(clEnqueueCopyImage);
++    LOAD_OPENCL_SYMBOL(clEnqueueFillBuffer);
++    LOAD_OPENCL_SYMBOL(clEnqueueMapBuffer);
++    LOAD_OPENCL_SYMBOL(clEnqueueMapImage);
++    LOAD_OPENCL_SYMBOL(clEnqueueNDRangeKernel);
++    LOAD_OPENCL_SYMBOL(clEnqueueReadBuffer);
++    LOAD_OPENCL_SYMBOL(clEnqueueReadImage);
++    LOAD_OPENCL_SYMBOL(clEnqueueUnmapMemObject);
++    LOAD_OPENCL_SYMBOL(clEnqueueWriteBuffer);
++    LOAD_OPENCL_SYMBOL(clEnqueueWriteImage);
++    LOAD_OPENCL_SYMBOL(clFinish);
++    LOAD_OPENCL_SYMBOL(clFlush);
++    LOAD_OPENCL_SYMBOL(clGetContextInfo);
++    LOAD_OPENCL_SYMBOL(clGetDeviceIDs);
++    LOAD_OPENCL_SYMBOL(clGetDeviceInfo);
++    LOAD_OPENCL_SYMBOL(clGetEventProfilingInfo);
++    LOAD_OPENCL_SYMBOL(clGetExtensionFunctionAddressForPlatform);
++    LOAD_OPENCL_SYMBOL(clGetImageInfo);
++    LOAD_OPENCL_SYMBOL(clGetMemObjectInfo);
++    LOAD_OPENCL_SYMBOL(clGetPlatformIDs);
++    LOAD_OPENCL_SYMBOL(clGetPlatformInfo);
++    LOAD_OPENCL_SYMBOL(clGetProgramBuildInfo);
++    LOAD_OPENCL_SYMBOL(clGetSupportedImageFormats);
++    LOAD_OPENCL_SYMBOL(clReleaseCommandQueue);
++    LOAD_OPENCL_SYMBOL(clReleaseContext);
++    LOAD_OPENCL_SYMBOL(clReleaseEvent);
++    LOAD_OPENCL_SYMBOL(clReleaseKernel);
++    LOAD_OPENCL_SYMBOL(clReleaseMemObject);
++    LOAD_OPENCL_SYMBOL(clReleaseProgram);
++    LOAD_OPENCL_SYMBOL(clRetainCommandQueue);
++    LOAD_OPENCL_SYMBOL(clSetKernelArg);
++    LOAD_OPENCL_SYMBOL(clWaitForEvents);
++
++    opencl_load_result = 0;
++}
++
++int ff_opencl_loader_init(void)
++{
++    pthread_once(&opencl_once, opencl_load_once);
++    return opencl_load_result;
++}
+diff --git a/src/ffmpeg/libavutil/opencl_loader.h b/src/ffmpeg/libavutil/opencl_loader.h
+new file mode 100644
+index 0000000..52b82d7
+--- /dev/null
++++ b/src/ffmpeg/libavutil/opencl_loader.h
+@@ -0,0 +1,113 @@
++/*
++ * Optional OpenCL runtime loader for Android.
++ *
++ * FFmpeg is built without a link-time dependency on the device's vendor
++ * libOpenCL.so. The core OpenCL entry points used by FFmpeg are redirected to
++ * function pointers populated by opencl_loader.c via dlopen/dlsym.
++ */
++#ifndef AVUTIL_OPENCL_LOADER_H
++#define AVUTIL_OPENCL_LOADER_H
++
++#define CL_TARGET_OPENCL_VERSION 120
++#define CL_USE_DEPRECATED_OPENCL_1_2_APIS
++#include <CL/cl.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++int ff_opencl_loader_init(void);
++
++#define FF_OPENCL_DISPATCH_SYMBOL(name) \
++    extern __attribute__((visibility("default"))) __typeof__(&name) ff_opencl_##name
++
++FF_OPENCL_DISPATCH_SYMBOL(clBuildProgram);
++FF_OPENCL_DISPATCH_SYMBOL(clCreateBuffer);
++FF_OPENCL_DISPATCH_SYMBOL(clCreateCommandQueue);
++FF_OPENCL_DISPATCH_SYMBOL(clCreateContext);
++FF_OPENCL_DISPATCH_SYMBOL(clCreateImage);
++FF_OPENCL_DISPATCH_SYMBOL(clCreateKernel);
++FF_OPENCL_DISPATCH_SYMBOL(clCreateProgramWithSource);
++FF_OPENCL_DISPATCH_SYMBOL(clCreateSubBuffer);
++FF_OPENCL_DISPATCH_SYMBOL(clEnqueueCopyImage);
++FF_OPENCL_DISPATCH_SYMBOL(clEnqueueFillBuffer);
++FF_OPENCL_DISPATCH_SYMBOL(clEnqueueMapBuffer);
++FF_OPENCL_DISPATCH_SYMBOL(clEnqueueMapImage);
++FF_OPENCL_DISPATCH_SYMBOL(clEnqueueNDRangeKernel);
++FF_OPENCL_DISPATCH_SYMBOL(clEnqueueReadBuffer);
++FF_OPENCL_DISPATCH_SYMBOL(clEnqueueReadImage);
++FF_OPENCL_DISPATCH_SYMBOL(clEnqueueUnmapMemObject);
++FF_OPENCL_DISPATCH_SYMBOL(clEnqueueWriteBuffer);
++FF_OPENCL_DISPATCH_SYMBOL(clEnqueueWriteImage);
++FF_OPENCL_DISPATCH_SYMBOL(clFinish);
++FF_OPENCL_DISPATCH_SYMBOL(clFlush);
++FF_OPENCL_DISPATCH_SYMBOL(clGetContextInfo);
++FF_OPENCL_DISPATCH_SYMBOL(clGetDeviceIDs);
++FF_OPENCL_DISPATCH_SYMBOL(clGetDeviceInfo);
++FF_OPENCL_DISPATCH_SYMBOL(clGetEventProfilingInfo);
++FF_OPENCL_DISPATCH_SYMBOL(clGetExtensionFunctionAddressForPlatform);
++FF_OPENCL_DISPATCH_SYMBOL(clGetImageInfo);
++FF_OPENCL_DISPATCH_SYMBOL(clGetMemObjectInfo);
++FF_OPENCL_DISPATCH_SYMBOL(clGetPlatformIDs);
++FF_OPENCL_DISPATCH_SYMBOL(clGetPlatformInfo);
++FF_OPENCL_DISPATCH_SYMBOL(clGetProgramBuildInfo);
++FF_OPENCL_DISPATCH_SYMBOL(clGetSupportedImageFormats);
++FF_OPENCL_DISPATCH_SYMBOL(clReleaseCommandQueue);
++FF_OPENCL_DISPATCH_SYMBOL(clReleaseContext);
++FF_OPENCL_DISPATCH_SYMBOL(clReleaseEvent);
++FF_OPENCL_DISPATCH_SYMBOL(clReleaseKernel);
++FF_OPENCL_DISPATCH_SYMBOL(clReleaseMemObject);
++FF_OPENCL_DISPATCH_SYMBOL(clReleaseProgram);
++FF_OPENCL_DISPATCH_SYMBOL(clRetainCommandQueue);
++FF_OPENCL_DISPATCH_SYMBOL(clSetKernelArg);
++FF_OPENCL_DISPATCH_SYMBOL(clWaitForEvents);
++
++/* Redirect only core OpenCL 1.2 entry points. Extension entry points in
++ * hwcontext_opencl.c are intentionally left alone because FFmpeg obtains
++ * those through clGetExtensionFunctionAddressForPlatform(). */
++#define clBuildProgram                         (*ff_opencl_clBuildProgram)
++#define clCreateBuffer                         (*ff_opencl_clCreateBuffer)
++#define clCreateCommandQueue                  (*ff_opencl_clCreateCommandQueue)
++#define clCreateContext                        (*ff_opencl_clCreateContext)
++#define clCreateImage                          (*ff_opencl_clCreateImage)
++#define clCreateKernel                         (*ff_opencl_clCreateKernel)
++#define clCreateProgramWithSource              (*ff_opencl_clCreateProgramWithSource)
++#define clCreateSubBuffer                      (*ff_opencl_clCreateSubBuffer)
++#define clEnqueueCopyImage                     (*ff_opencl_clEnqueueCopyImage)
++#define clEnqueueFillBuffer                    (*ff_opencl_clEnqueueFillBuffer)
++#define clEnqueueMapBuffer                     (*ff_opencl_clEnqueueMapBuffer)
++#define clEnqueueMapImage                      (*ff_opencl_clEnqueueMapImage)
++#define clEnqueueNDRangeKernel                 (*ff_opencl_clEnqueueNDRangeKernel)
++#define clEnqueueReadBuffer                    (*ff_opencl_clEnqueueReadBuffer)
++#define clEnqueueReadImage                     (*ff_opencl_clEnqueueReadImage)
++#define clEnqueueUnmapMemObject                (*ff_opencl_clEnqueueUnmapMemObject)
++#define clEnqueueWriteBuffer                   (*ff_opencl_clEnqueueWriteBuffer)
++#define clEnqueueWriteImage                    (*ff_opencl_clEnqueueWriteImage)
++#define clFinish                               (*ff_opencl_clFinish)
++#define clFlush                                (*ff_opencl_clFlush)
++#define clGetContextInfo                       (*ff_opencl_clGetContextInfo)
++#define clGetDeviceIDs                         (*ff_opencl_clGetDeviceIDs)
++#define clGetDeviceInfo                        (*ff_opencl_clGetDeviceInfo)
++#define clGetEventProfilingInfo                (*ff_opencl_clGetEventProfilingInfo)
++#define clGetExtensionFunctionAddressForPlatform (*ff_opencl_clGetExtensionFunctionAddressForPlatform)
++#define clGetImageInfo                         (*ff_opencl_clGetImageInfo)
++#define clGetMemObjectInfo                     (*ff_opencl_clGetMemObjectInfo)
++#define clGetPlatformIDs                       (*ff_opencl_clGetPlatformIDs)
++#define clGetPlatformInfo                      (*ff_opencl_clGetPlatformInfo)
++#define clGetProgramBuildInfo                  (*ff_opencl_clGetProgramBuildInfo)
++#define clGetSupportedImageFormats             (*ff_opencl_clGetSupportedImageFormats)
++#define clReleaseCommandQueue                  (*ff_opencl_clReleaseCommandQueue)
++#define clReleaseContext                       (*ff_opencl_clReleaseContext)
++#define clReleaseEvent                         (*ff_opencl_clReleaseEvent)
++#define clReleaseKernel                        (*ff_opencl_clReleaseKernel)
++#define clReleaseMemObject                     (*ff_opencl_clReleaseMemObject)
++#define clReleaseProgram                       (*ff_opencl_clReleaseProgram)
++#define clRetainCommandQueue                   (*ff_opencl_clRetainCommandQueue)
++#define clSetKernelArg                         (*ff_opencl_clSetKernelArg)
++#define clWaitForEvents                        (*ff_opencl_clWaitForEvents)
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* AVUTIL_OPENCL_LOADER_H */

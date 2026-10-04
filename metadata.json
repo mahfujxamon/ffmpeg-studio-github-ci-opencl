@@ -1,0 +1,6 @@
+{
+  "name": "Hybrid Video Editor",
+  "description": "Universal Android FFmpeg command renderer with native MediaCodec hardware acceleration and real media probing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
