@@ -386,32 +386,32 @@ jobs:
       # 12. ENABLE OPENCL + DISABLE OPENSSL
       # ============================================================
       - name: Configure FFmpeg OpenCL and disable OpenSSL
+        env:
+          WORKSPACE_DIR: ${{ github.workspace }}
         run: |
           set -euxo pipefail
 
           FFMPEG_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/ffmpeg.sh"
 
           test -f "$FFMPEG_SCRIPT"
+          test -f "$WORKSPACE_DIR/opencl-headers/CL/cl.h"
+          test -f "$WORKSPACE_DIR/icd-loader/build/libOpenCL.a"
 
-          test -f \
-            "$GITHUB_WORKSPACE/opencl-headers/CL/cl.h"
-
-          test -f \
-            "$GITHUB_WORKSPACE/icd-loader/build/libOpenCL.a"
-
-          python3 - "$FFMPEG_SCRIPT" <<'PY'
+          python3 - "$FFMPEG_SCRIPT" "$WORKSPACE_DIR" <<'PY'
           from pathlib import Path
           import re
           import sys
 
           path = Path(sys.argv[1])
+          workspace = sys.argv[2]
+
           text = path.read_text()
 
           OPENCL_BEGIN = "# FFMPEGKIT_KHRONOS_OPENCL_BEGIN"
           OPENCL_END   = "# FFMPEGKIT_KHRONOS_OPENCL_END"
 
           # --------------------------------------------------------
-          # Remove an older injected Khronos block, if present.
+          # Remove previous injected Khronos OpenCL block
           # --------------------------------------------------------
           pattern = re.compile(
               rf"(?ms)^"
@@ -422,12 +422,7 @@ jobs:
           text = pattern.sub("", text)
 
           # --------------------------------------------------------
-          # Disable the internal FFmpegKit OpenSSL configure flag.
-          #
-          # IMPORTANT:
-          # Do NOT pass --disable-openssl to android.sh.
-          # android.sh does not use that as a normal architecture/
-          # library option. We remove the internal enable flag here.
+          # Remove FFmpegKit internal OpenSSL enable line
           # --------------------------------------------------------
           lines = text.splitlines()
 
@@ -442,7 +437,7 @@ jobs:
           text = "\n".join(cleaned) + "\n"
 
           # --------------------------------------------------------
-          # Make sure GnuTLS line exists.
+          # GnuTLS must remain enabled
           # --------------------------------------------------------
           gnutls_line = 'CONFIGURE_POSTFIX+=" --enable-gnutls"'
 
@@ -452,38 +447,47 @@ jobs:
               )
 
           # --------------------------------------------------------
-          # Inject official Khronos OpenCL.
-          #
-          # IMPORTANT:
-          # - OpenCL is explicitly enabled.
-          # - Khronos headers are added to CFLAGS.
-          # - Static libOpenCL.a search path is added to LDFLAGS.
-          # - -ldl is added because the Khronos loader uses dlopen/dlsym.
-          # - Do NOT use --extra-libs=-ldl as that caused the previous
-          #   FFmpeg configure parser failure.
+          # Official Khronos OpenCL configuration
           # --------------------------------------------------------
+          opencl_include = (
+              f'CONFIGURE_POSTFIX+=" '
+              f'--enable-opencl '
+              f'--extra-cflags=-I{workspace}/opencl-headers"'
+          )
+
+          opencl_ldflags = (
+              f'CONFIGURE_POSTFIX+=" '
+              f'--extra-ldflags=-L{workspace}/icd-loader/build"'
+          )
+
+          opencl_dl = (
+              'CONFIGURE_POSTFIX+=" '
+              '--extra-ldflags=-ldl"'
+          )
+
           opencl_block = f"""
           {OPENCL_BEGIN}
 
           # Official Khronos OpenCL-Headers
-          CONFIGURE_POSTFIX+=" --enable-opencl"
+          {opencl_include}
 
-          CONFIGURE_POSTFIX+=" --extra-cflags=-I${{GITHUB_WORKSPACE}}/opencl-headers"
+          # Official Khronos static ICD Loader
+          {opencl_ldflags}
 
-          # Official Khronos static ICD loader
-          CONFIGURE_POSTFIX+=" --extra-ldflags=-L${{GITHUB_WORKSPACE}}/icd-loader/build"
-
-          # Android dynamic linker API required by ICD Loader
-          CONFIGURE_POSTFIX+=" --extra-ldflags=-ldl"
+          # Android dynamic linker required by ICD Loader
+          {opencl_dl}
 
           {OPENCL_END}
           """
 
+          # --------------------------------------------------------
+          # Insert immediately after GnuTLS
+          # --------------------------------------------------------
           insert_at = text.find(gnutls_line)
 
           if insert_at < 0:
               raise SystemExit(
-                  "ERROR: Could not locate GnuTLS line"
+                  "ERROR: Could not locate GnuTLS configuration line"
               )
 
           insert_at += len(gnutls_line)
@@ -496,18 +500,15 @@ jobs:
 
           path.write_text(text)
 
-          print(
-              "OpenCL enabled with official Khronos static ICD loader"
-          )
-
-          print(
-              "OpenSSL configure flag removed"
-          )
+          print("========================================")
+          print("OpenCL configuration installed")
+          print("OpenSSL configuration disabled")
+          print("========================================")
           PY
 
           echo
           echo "================================================"
-          echo "===== FINAL FFmpeg OpenCL / SSL SETTINGS ======"
+          echo "===== FINAL FFMPEG OPENCL / SSL SETTINGS ======"
           echo "================================================"
 
           grep -nE \
@@ -520,51 +521,69 @@ jobs:
       # 13. VERIFY OPENCL + SSL CONFIGURATION
       # ============================================================
       - name: Verify FFmpeg OpenCL and SSL configuration
+        env:
+          WORKSPACE_DIR: ${{ github.workspace }}
         run: |
           set -euxo pipefail
 
           FFMPEG_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/ffmpeg.sh"
 
-          echo "=== Check OpenCL ==="
+          echo "=== OpenCL ==="
 
           grep -n \
-            'CONFIGURE_POSTFIX+=" --enable-opencl"' \
+            'CONFIGURE_POSTFIX+=" --enable-opencl' \
             "$FFMPEG_SCRIPT"
 
           grep -n \
-            'extra-cflags=-I${GITHUB_WORKSPACE}/opencl-headers' \
+            'extra-cflags=-I' \
             "$FFMPEG_SCRIPT"
 
           grep -n \
-            'extra-ldflags=-L${GITHUB_WORKSPACE}/icd-loader/build' \
+            'extra-ldflags=-L' \
             "$FFMPEG_SCRIPT"
 
           grep -n \
             'extra-ldflags=-ldl' \
             "$FFMPEG_SCRIPT"
 
-          echo "=== Check GnuTLS ==="
+          echo
+          echo "=== GnuTLS ==="
 
           grep -n \
             'enable-gnutls' \
             "$FFMPEG_SCRIPT"
 
-          echo "=== Check OpenSSL ==="
+          echo
+          echo "=== OpenSSL ==="
 
           if grep -n \
             -- '--enable-openssl' \
             "$FFMPEG_SCRIPT"; then
 
-            echo
-            echo "ERROR: OpenSSL is still enabled inside ffmpeg.sh"
+            echo "ERROR: OpenSSL is still enabled"
             exit 1
           fi
 
           echo "OpenSSL enable flag: ABSENT"
 
           echo
-          echo "OpenCL configuration verification: PASS"
-          echo "SSL configuration verification: PASS"
+          echo "=== Khronos files ==="
+
+          test -f \
+            "$WORKSPACE_DIR/opencl-headers/CL/cl.h"
+
+          test -f \
+            "$WORKSPACE_DIR/opencl-headers/OpenCL/cl.h"
+
+          test -f \
+            "$WORKSPACE_DIR/icd-loader/build/libOpenCL.a"
+
+          echo
+          echo "========================================"
+          echo "OpenCL configuration: PASS"
+          echo "GnuTLS configuration: PASS"
+          echo "OpenSSL disabled: PASS"
+          echo "========================================"
 
 
       # ============================================================
@@ -699,7 +718,6 @@ jobs:
           ./android.sh \
             --lts \
             --full \
-            --speed \
             --enable-gpl \
             --enable-android-media-codec \
             --disable-arm-v7a \
