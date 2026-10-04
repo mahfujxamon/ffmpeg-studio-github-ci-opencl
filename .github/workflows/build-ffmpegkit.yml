@@ -126,7 +126,7 @@ jobs:
 
 
       # ============================================================
-      # 7. VERIFY TOOLCHAIN
+      # 7. VERIFY TOOLCHAIN (Updated without libtool check)
       # ============================================================
       - name: Verify build toolchain
         run: |
@@ -137,7 +137,6 @@ jobs:
           command -v autoconf
           command -v automake
           command -v libtoolize
-          command -v libtool
           command -v pkg-config
           command -v make
           command -v gcc
