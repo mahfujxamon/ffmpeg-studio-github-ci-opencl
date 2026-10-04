@@ -129,54 +129,17 @@ jobs:
           GNUTLS_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/gnutls.sh"
           test -f "$GNUTLS_SCRIPT"
 
-          python3 - "$GNUTLS_SCRIPT" <<'PY'
-          from pathlib import Path
-          import sys
+          echo "=== GnuTLS script ==="
+          sed -n '1,240p' "$GNUTLS_SCRIPT"
 
-          path = Path(sys.argv[1])
-          text = path.read_text()
+          echo
+          echo "=== Searching configure/build commands ==="
+          grep -n -E \
+            'configure|CFLAGS|CPPFLAGS|CXXFLAGS|gnutls' \
+            "$GNUTLS_SCRIPT" || true
 
-          marker = 'PATCH_GNUTLS_ANDROID_CLANG_FLAGS'
-
-          if marker in text:
-              print("GnuTLS Android Clang patch already installed")
-              sys.exit(0)
-
-          # Insert immediately after the GnuTLS script variables/functions are loaded.
-          anchor = 'LIB_NAME="gnutls"'
-
-          if anchor not in text:
-              print("ERROR: LIB_NAME=\"gnutls\" anchor not found")
-              sys.exit(1)
-
-          patch = r'''
-          # PATCH_GNUTLS_ANDROID_CLANG_FLAGS
-
-          # GnuTLS 3.7.9 contains old gnulib/autoconf probes which are
-          # problematic with modern Android NDK Clang.
-          #
-          # Keep these flags local to GnuTLS. Do not weaken the entire
-          # FFmpeg/Android build.
-
-          export CFLAGS="${CFLAGS:-} -Wno-error=implicit-function-declaration"
-          export CFLAGS="${CFLAGS} -Wno-error=incompatible-pointer-types"
-          export CFLAGS="${CFLAGS} -Wno-error=int-conversion"
-          export CFLAGS="${CFLAGS} -Wno-error=deprecated-non-prototype"
-
-          export CPPFLAGS="${CPPFLAGS:-}"
-
-          echo "=== GnuTLS Android compatibility CFLAGS ==="
-          echo "${CFLAGS}"
-          echo "============================================"
-          '''
-
-          text = text.replace(anchor, anchor + "\n" + patch, 1)
-
-          path.write_text(text)
-          print("GnuTLS Android Clang compatibility patch installed")
-          PY
-
-          grep -n -A15 -B3 "PATCH_GNUTLS_ANDROID_CLANG_FLAGS" "$GNUTLS_SCRIPT"
+          echo
+          echo "GnuTLS script inspection complete."
 
       - name: Add OpenCL headers
         if: ${{ hashFiles('patches/ffmpeg-opencl-runtime.patch') != '' }}
