@@ -13,6 +13,11 @@ env:
   FFMPEGKIT_TAG: v8.1.9-lts-android
   ANDROID_NDK_VERSION: 27.2.12479018
 
+  # Khronos official OpenCL repositories
+  OPENCL_HEADERS_TAG: v2026.05.29
+  OPENCL_LOADER_TAG: v2026.05.29
+
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -163,7 +168,8 @@ jobs:
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
           echo "ANDROID_NDK_VERSION=${ANDROID_NDK_VERSION}"
 
-          test -d "${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
+          test -d \
+            "${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
 
           test -f \
             "${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}/source.properties"
@@ -173,7 +179,7 @@ jobs:
 
 
       # ============================================================
-      # 8. CLONE FFmpegKit
+      # 8. CLONE FFMPEGKIT
       # ============================================================
       - name: Clone pinned FFmpegKit source
         run: |
@@ -185,9 +191,14 @@ jobs:
             https://github.com/ffmpegkit-maintained/ffmpeg.git \
             ffmpegkit
 
+          test -d ffmpegkit/android-8.1-lts
+
+          echo "FFmpegKit source:"
+          git -C ffmpegkit rev-parse HEAD
+
 
       # ============================================================
-      # 9. BUILD KRHONOS OPENCL ICD LOADER
+      # 9. BUILD OFFICIAL KRHONOS OPENCL HEADERS + ICD LOADER
       # ============================================================
       - name: Build Khronos OpenCL ICD Loader
         run: |
@@ -196,33 +207,51 @@ jobs:
           rm -rf opencl-headers
           rm -rf icd-loader
 
+          echo "=== Clone OpenCL-Headers ==="
+
           git clone \
             --depth 1 \
+            --branch "${OPENCL_HEADERS_TAG}" \
             https://github.com/KhronosGroup/OpenCL-Headers.git \
             opencl-headers
 
+          echo "=== Clone OpenCL-ICD-Loader ==="
+
           git clone \
             --depth 1 \
+            --branch "${OPENCL_LOADER_TAG}" \
             https://github.com/KhronosGroup/OpenCL-ICD-Loader.git \
             icd-loader
 
-          test -f opencl-headers/CL/cl.h
-          test -f icd-loader/CMakeLists.txt
+          test -f \
+            opencl-headers/CL/cl.h
+
+          test -f \
+            icd-loader/CMakeLists.txt
 
           export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
 
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
+
           rm -rf icd-loader/build
+
+          mkdir -p icd-loader/build
+
+          echo "=== Configure Khronos ICD Loader ==="
 
           cmake \
             -S icd-loader \
             -B icd-loader/build \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
+            -DANDROID_PLATFORM=android-21 \
             -DCMAKE_BUILD_TYPE=Release \
             -DOPENCL_ICD_LOADER_BUILD_SHARED_LIBS=OFF \
             -DOPENCL_ICD_LOADER_PIC=ON \
+            -DENABLE_OPENCL_LAYERS=OFF \
             -DOPENCL_ICD_LOADER_HEADERS_DIR="${GITHUB_WORKSPACE}/opencl-headers"
+
+          echo "=== Build Khronos static loader ==="
 
           cmake \
             --build icd-loader/build \
@@ -232,43 +261,131 @@ jobs:
 
           echo "=== OpenCL loader artifacts ==="
 
-          find icd-loader/build \
+          find \
+            icd-loader/build \
             -type f \
-            -name 'libOpenCL.a' \
+            \( \
+              -name 'libOpenCL.a' \
+              -o \
+              -name 'OpenCL.a' \
+            \) \
             -print
 
-          test -f icd-loader/build/libOpenCL.a
+          LOADER_A="$(
+            find \
+              icd-loader/build \
+              -type f \
+              -name 'libOpenCL.a' \
+              | head -n 1
+          )"
 
-          file icd-loader/build/libOpenCL.a
+          test -n "$LOADER_A"
+          test -f "$LOADER_A"
 
-          ls -lh icd-loader/build/libOpenCL.a
+          cp \
+            "$LOADER_A" \
+            icd-loader/build/libOpenCL.a
+
+          echo "=== Final static loader ==="
+
+          file \
+            icd-loader/build/libOpenCL.a
+
+          ls -lh \
+            icd-loader/build/libOpenCL.a
 
 
       # ============================================================
-      # 10. PREPARE OPENCL HEADER COMPATIBILITY
+      # 10. VERIFY OPENCL LOADER SYMBOLS + ANDROID LINK
+      # ============================================================
+      - name: Verify OpenCL static loader
+        run: |
+          set -euxo pipefail
+
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
+
+          NDK_BIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          test -x \
+            "${NDK_BIN}/aarch64-linux-android21-clang"
+
+          echo "=== Archive members ==="
+
+          ar t \
+            icd-loader/build/libOpenCL.a \
+            | head -50
+
+          echo "=== OpenCL exported definitions ==="
+
+          nm -g --defined-only \
+            icd-loader/build/libOpenCL.a \
+            | grep -E \
+              'clGetPlatformIDs|clGetPlatformInfo|clGetDeviceIDs' \
+            | head -50
+
+          echo "=== Static loader smoke source ==="
+
+          cat > /tmp/opencl_smoke.c <<'EOF'
+          #include <CL/cl.h>
+
+          int main(void) {
+              cl_uint count = 0;
+              return (clGetPlatformIDs(0, NULL, &count) == CL_SUCCESS) ? 0 : 1;
+          }
+          EOF
+
+          echo "=== Static loader smoke link ==="
+
+          "${NDK_BIN}/aarch64-linux-android21-clang" \
+            -I"${GITHUB_WORKSPACE}/opencl-headers" \
+            /tmp/opencl_smoke.c \
+            -L"${GITHUB_WORKSPACE}/icd-loader/build" \
+            -Wl,--no-undefined \
+            -lOpenCL \
+            -ldl \
+            -o /tmp/opencl_smoke
+
+          file /tmp/opencl_smoke
+
+          readelf -lW /tmp/opencl_smoke \
+            | awk '$1=="LOAD" {print}'
+
+          echo "OpenCL static loader smoke link: PASS"
+
+
+      # ============================================================
+      # 11. PREPARE OPENCL HEADER COMPATIBILITY
       # ============================================================
       - name: Prepare OpenCL headers
         run: |
           set -euxo pipefail
 
-          test -f opencl-headers/CL/cl.h
+          test -f \
+            opencl-headers/CL/cl.h
 
-          rm -rf opencl-headers/OpenCL
+          rm -rf \
+            opencl-headers/OpenCL
 
-          ln -s CL opencl-headers/OpenCL
+          ln -s \
+            CL \
+            opencl-headers/OpenCL
 
-          test -f opencl-headers/OpenCL/cl.h
+          test -f \
+            opencl-headers/OpenCL/cl.h
 
           echo "=== OpenCL header paths ==="
 
-          ls -l opencl-headers/CL/cl.h
-          ls -l opencl-headers/OpenCL/cl.h
+          ls -l \
+            opencl-headers/CL/cl.h
+
+          ls -l \
+            opencl-headers/OpenCL/cl.h
 
 
       # ============================================================
-      # 11. ENABLE OPENCL IN FFMPEG
+      # 12. ENABLE OPENCL + DISABLE OPENSSL
       # ============================================================
-      - name: Enable Khronos OpenCL in FFmpeg
+      - name: Configure FFmpeg OpenCL and disable OpenSSL
         run: |
           set -euxo pipefail
 
@@ -280,56 +397,178 @@ jobs:
             "$GITHUB_WORKSPACE/opencl-headers/CL/cl.h"
 
           test -f \
-            "$GITHUB_WORKSPACE/opencl-headers/OpenCL/cl.h"
-
-          test -f \
             "$GITHUB_WORKSPACE/icd-loader/build/libOpenCL.a"
 
           python3 - "$FFMPEG_SCRIPT" <<'PY'
           from pathlib import Path
+          import re
           import sys
 
           path = Path(sys.argv[1])
           text = path.read_text()
 
-          if '--enable-opencl' in text:
+          OPENCL_BEGIN = "# FFMPEGKIT_KHRONOS_OPENCL_BEGIN"
+          OPENCL_END   = "# FFMPEGKIT_KHRONOS_OPENCL_END"
+
+          # --------------------------------------------------------
+          # Remove an older injected Khronos block, if present.
+          # --------------------------------------------------------
+          pattern = re.compile(
+              rf"(?ms)^"
+              rf"{re.escape(OPENCL_BEGIN)}.*?"
+              rf"^{re.escape(OPENCL_END)}\n?"
+          )
+
+          text = pattern.sub("", text)
+
+          # --------------------------------------------------------
+          # Disable the internal FFmpegKit OpenSSL configure flag.
+          #
+          # IMPORTANT:
+          # Do NOT pass --disable-openssl to android.sh.
+          # android.sh does not use that as a normal architecture/
+          # library option. We remove the internal enable flag here.
+          # --------------------------------------------------------
+          lines = text.splitlines()
+
+          cleaned = []
+
+          for line in lines:
+              if 'CONFIGURE_POSTFIX+=" --enable-openssl"' in line:
+                  continue
+
+              cleaned.append(line)
+
+          text = "\n".join(cleaned) + "\n"
+
+          # --------------------------------------------------------
+          # Make sure GnuTLS line exists.
+          # --------------------------------------------------------
+          gnutls_line = 'CONFIGURE_POSTFIX+=" --enable-gnutls"'
+
+          if gnutls_line not in text:
               raise SystemExit(
-                  "ERROR: --enable-opencl already exists"
+                  "ERROR: GnuTLS CONFIGURE_POSTFIX line not found"
               )
 
-          anchor = 'CONFIGURE_POSTFIX=""'
+          # --------------------------------------------------------
+          # Inject official Khronos OpenCL.
+          #
+          # IMPORTANT:
+          # - OpenCL is explicitly enabled.
+          # - Khronos headers are added to CFLAGS.
+          # - Static libOpenCL.a search path is added to LDFLAGS.
+          # - -ldl is added because the Khronos loader uses dlopen/dlsym.
+          # - Do NOT use --extra-libs=-ldl as that caused the previous
+          #   FFmpeg configure parser failure.
+          # --------------------------------------------------------
+          opencl_block = f"""
+          {OPENCL_BEGIN}
 
-          if anchor not in text:
-              raise SystemExit(
-                  "ERROR: CONFIGURE_POSTFIX anchor not found"
-              )
-
-          addition = r'''
+          # Official Khronos OpenCL-Headers
           CONFIGURE_POSTFIX+=" --enable-opencl"
-          CONFIGURE_POSTFIX+=" --extra-cflags=-I${GITHUB_WORKSPACE}/opencl-headers"
-          CONFIGURE_POSTFIX+=" --extra-libs=\"-lOpenCL\""
-          '''
 
-          text = text.replace(
-              anchor,
-              anchor + addition,
-              1
+          CONFIGURE_POSTFIX+=" --extra-cflags=-I${{GITHUB_WORKSPACE}}/opencl-headers"
+
+          # Official Khronos static ICD loader
+          CONFIGURE_POSTFIX+=" --extra-ldflags=-L${{GITHUB_WORKSPACE}}/icd-loader/build"
+
+          # Android dynamic linker API required by ICD Loader
+          CONFIGURE_POSTFIX+=" --extra-ldflags=-ldl"
+
+          {OPENCL_END}
+          """
+
+          insert_at = text.find(gnutls_line)
+
+          if insert_at < 0:
+              raise SystemExit(
+                  "ERROR: Could not locate GnuTLS line"
+              )
+
+          insert_at += len(gnutls_line)
+
+          text = (
+              text[:insert_at]
+              + opencl_block
+              + text[insert_at:]
           )
 
           path.write_text(text)
 
-          print("Khronos OpenCL configuration injected")
+          print(
+              "OpenCL enabled with official Khronos static ICD loader"
+          )
+
+          print(
+              "OpenSSL configure flag removed"
+          )
           PY
 
-          echo "=== OpenCL configure lines ==="
+          echo
+          echo "================================================"
+          echo "===== FINAL FFmpeg OpenCL / SSL SETTINGS ======"
+          echo "================================================"
 
           grep -nE \
-            'enable-opencl|extra-cflags|extra-libs' \
-            "$FFMPEG_SCRIPT"
+            'enable-opencl|enable-openssl|enable-gnutls|extra-cflags|extra-ldflags|FFMPEGKIT_KHRONOS_OPENCL' \
+            "$FFMPEG_SCRIPT" \
+            || true
 
 
       # ============================================================
-      # 12. PATCH GNUTLS FOR NDK 27.2
+      # 13. VERIFY OPENCL + SSL CONFIGURATION
+      # ============================================================
+      - name: Verify FFmpeg OpenCL and SSL configuration
+        run: |
+          set -euxo pipefail
+
+          FFMPEG_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/ffmpeg.sh"
+
+          echo "=== Check OpenCL ==="
+
+          grep -n \
+            'CONFIGURE_POSTFIX+=" --enable-opencl"' \
+            "$FFMPEG_SCRIPT"
+
+          grep -n \
+            'extra-cflags=-I${GITHUB_WORKSPACE}/opencl-headers' \
+            "$FFMPEG_SCRIPT"
+
+          grep -n \
+            'extra-ldflags=-L${GITHUB_WORKSPACE}/icd-loader/build' \
+            "$FFMPEG_SCRIPT"
+
+          grep -n \
+            'extra-ldflags=-ldl' \
+            "$FFMPEG_SCRIPT"
+
+          echo "=== Check GnuTLS ==="
+
+          grep -n \
+            'enable-gnutls' \
+            "$FFMPEG_SCRIPT"
+
+          echo "=== Check OpenSSL ==="
+
+          if grep -n \
+            -- '--enable-openssl' \
+            "$FFMPEG_SCRIPT"; then
+
+            echo
+            echo "ERROR: OpenSSL is still enabled inside ffmpeg.sh"
+            exit 1
+          fi
+
+          echo "OpenSSL enable flag: ABSENT"
+
+          echo
+          echo "OpenCL configuration verification: PASS"
+          echo "SSL configuration verification: PASS"
+
+
+      # ============================================================
+      # 14. PATCH GNUTLS FOR NDK 27.2
       # ============================================================
       - name: Patch GnuTLS for Android NDK 27.2
         run: |
@@ -346,21 +585,26 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text()
 
-          marker = 'PATCH_GNUTLS_ANDROID_CLANG_FLAGS'
+          marker = "PATCH_GNUTLS_ANDROID_CLANG_FLAGS"
 
           if marker in text:
-              print("GnuTLS Android Clang patch already installed")
+              print(
+                  "GnuTLS Android Clang patch already installed"
+              )
               sys.exit(0)
 
           anchor = \
               'if [[ ! -f "${BASEDIR}"/src/"${LIB_NAME}"/configure ]]'
 
           if anchor not in text:
-              print("ERROR: configure anchor not found")
+              print(
+                  "ERROR: configure anchor not found"
+              )
               sys.exit(1)
 
           patch = r'''
           # PATCH_GNUTLS_ANDROID_CLANG_FLAGS
+
           # Android NDK 27 Clang compatibility
           export CFLAGS="${CFLAGS:-} \
           -Wno-error=implicit-function-declaration \
@@ -390,81 +634,52 @@ jobs:
 
 
       # ============================================================
-      # 13. DISABLE OPENSSL
+      # 15. FINAL PRE-BUILD SANITY CHECK
       # ============================================================
-      - name: Disable OpenSSL in Android FFmpeg configure
+      - name: Final native build sanity check
         run: |
-          set -eux
+          set -euxo pipefail
+
+          echo "=== NDK ==="
+
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
+
+          test -x \
+            "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+
+          echo "=== Khronos OpenCL headers ==="
+
+          test -f \
+            "$GITHUB_WORKSPACE/opencl-headers/CL/cl.h"
+
+          test -f \
+            "$GITHUB_WORKSPACE/opencl-headers/OpenCL/cl.h"
+
+          echo "=== Khronos static loader ==="
+
+          test -f \
+            "$GITHUB_WORKSPACE/icd-loader/build/libOpenCL.a"
+
+          file \
+            "$GITHUB_WORKSPACE/icd-loader/build/libOpenCL.a"
+
+          echo "=== FFmpeg configure flags ==="
 
           FFMPEG_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/ffmpeg.sh"
-
-          test -f "$FFMPEG_SCRIPT"
-
-          python3 - "$FFMPEG_SCRIPT" <<'PY'
-          from pathlib import Path
-          import sys
-
-          path = Path(sys.argv[1])
-          text = path.read_text()
-
-          old = 'CONFIGURE_POSTFIX+=" --enable-openssl"'
-
-          if old not in text:
-              print(
-                  "OpenSSL enable line not found; "
-                  "checking current state..."
-              )
-          else:
-              text = text.replace(
-                  old,
-                  '# OpenSSL disabled: GnuTLS is used instead',
-                  1
-              )
-
-              path.write_text(text)
-
-              print(
-                  "OpenSSL disabled in Android FFmpeg configure"
-              )
-          PY
-
-          echo "=== SSL configuration ==="
 
           grep -nE \
-            'enable-gnutls|enable-openssl|disable-openssl' \
-            "$FFMPEG_SCRIPT" || true
+            'enable-opencl|enable-gnutls|enable-openssl|extra-cflags|extra-ldflags' \
+            "$FFMPEG_SCRIPT" \
+            || true
+
+          echo
+          echo "========================================"
+          echo "Native OpenCL build prerequisites: PASS"
+          echo "========================================"
 
 
       # ============================================================
-      # 14. VERIFY SSL CONFIG
-      # ============================================================
-      - name: Verify FFmpeg SSL configuration
-        run: |
-          set -eux
-
-          FFMPEG_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/ffmpeg.sh"
-
-          echo "=== GnuTLS ==="
-
-          grep -n \
-            'enable-gnutls' \
-            "$FFMPEG_SCRIPT"
-
-          echo "=== OpenSSL ==="
-
-          if grep -n \
-            'CONFIGURE_POSTFIX+=" --enable-openssl"' \
-            "$FFMPEG_SCRIPT"; then
-
-            echo "ERROR: OpenSSL is still enabled"
-            exit 1
-          fi
-
-          echo "OpenSSL enable flag is absent"
-
-
-      # ============================================================
-      # 15. BUILD FFMPEGKIT AAR
+      # 16. BUILD FFMPEGKIT AAR
       # ============================================================
       - name: Build arm64-v8a FFmpegKit AAR
         env:
@@ -476,13 +691,15 @@ jobs:
         run: |
           cd ffmpegkit/android-8.1-lts
 
-          chmod +x android.sh
+          chmod +x \
+            android.sh
 
           set +e
 
           ./android.sh \
             --lts \
             --full \
+            --speed \
             --enable-gpl \
             --enable-android-media-codec \
             --disable-arm-v7a \
@@ -511,7 +728,8 @@ jobs:
               -path '*gnutls*/build.log' \
             \) \
             -print 2>/dev/null \
-            | head -100
+            | head -100 \
+            || true
 
           echo
           echo "===== GnuTLS malformed sizeof ====="
@@ -519,7 +737,8 @@ jobs:
           grep -R -n -E \
             'sizeof[[:space:]]*\([[:space:]]*\(' \
             src 2>/dev/null \
-            | head -100 || true
+            | head -100 \
+            || true
 
           echo
           echo "===== GnuTLS config.log errors ====="
@@ -530,7 +749,8 @@ jobs:
             -print0 2>/dev/null |
             xargs -0 -r grep -n -E \
               'error:|ERROR:|failed|cannot|not found|undefined reference|expected expression' \
-            | tail -200 || true
+            | tail -200 \
+            || true
 
           echo
           echo "===== FFmpeg configure errors ====="
@@ -538,7 +758,8 @@ jobs:
           grep -n -i -E \
             'error:|ERROR:|failed|cannot|not found|undefined reference' \
             build.log 2>/dev/null \
-            | tail -300 || true
+            | tail -300 \
+            || true
 
           echo
           echo "===== OpenCL references ====="
@@ -546,7 +767,26 @@ jobs:
           grep -n -i \
             'opencl' \
             build.log 2>/dev/null \
-            | tail -200 || true
+            | tail -250 \
+            || true
+
+          echo
+          echo "===== OpenSSL references ====="
+
+          grep -n -i \
+            'openssl' \
+            build.log 2>/dev/null \
+            | tail -250 \
+            || true
+
+          echo
+          echo "===== GnuTLS references ====="
+
+          grep -n -i \
+            'gnutls' \
+            build.log 2>/dev/null \
+            | tail -250 \
+            || true
 
           echo
           echo "===== MediaCodec references ====="
@@ -554,19 +794,21 @@ jobs:
           grep -n -i \
             'mediacodec' \
             build.log 2>/dev/null \
-            | tail -300 || true
+            | tail -300 \
+            || true
 
           echo
-          echo "===== Last 300 build.log lines ====="
+          echo "===== Last 400 build.log lines ====="
 
-          tail -300 \
-            build.log 2>/dev/null || true
+          tail -400 \
+            build.log 2>/dev/null \
+            || true
 
           exit $BUILD_STATUS
 
 
       # ============================================================
-      # 16. LOCATE AAR
+      # 17. LOCATE AAR
       # ============================================================
       - name: Locate custom AAR
         run: |
@@ -581,8 +823,10 @@ jobs:
           )"
 
           test -n "$AAR"
+          test -f "$AAR"
 
-          mkdir -p app/libs
+          mkdir -p \
+            app/libs
 
           cp \
             "$AAR" \
@@ -590,17 +834,22 @@ jobs:
 
           echo "AAR=$AAR"
 
+          ls -lh \
+            app/libs/ffmpeg-kit.aar
+
 
       # ============================================================
-      # 17. VERIFY AAR CONTENTS + 16KB ELF ALIGNMENT
+      # 18. VERIFY AAR CONTENTS
       # ============================================================
-      - name: Verify AAR OpenCL/MediaCodec libraries and 16 KB alignment
+      - name: Verify AAR native libraries
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
-          rm -rf /tmp/aar-check
+          rm -rf \
+            /tmp/aar-check
 
-          mkdir -p /tmp/aar-check
+          mkdir -p \
+            /tmp/aar-check
 
           unzip -q \
             app/libs/ffmpeg-kit.aar \
@@ -617,6 +866,70 @@ jobs:
             -name '*.so' \
             -type f \
             -print
+
+          SO_COUNT="$(
+            find \
+              /tmp/aar-check/jni/arm64-v8a \
+              -name '*.so' \
+              -type f \
+              | wc -l
+          )"
+
+          test "$SO_COUNT" -gt 0
+
+          echo
+          echo "Native .so count: $SO_COUNT"
+
+
+      # ============================================================
+      # 19. VERIFY OPENCL SYMBOLS IN AAR
+      # ============================================================
+      - name: Verify OpenCL symbols inside native libraries
+        run: |
+          set -euxo pipefail
+
+          OPENCL_FOUND=0
+
+          while IFS= read -r so; do
+
+            echo
+            echo "Checking OpenCL symbols in:"
+            echo "$so"
+
+            if readelf -Ws "$so" 2>/dev/null |
+              grep -E \
+                '\bcl(GetPlatformIDs|GetPlatformInfo|GetDeviceIDs|CreateContext)\b' \
+                >/dev/null; then
+
+              echo "OpenCL loader symbols found in:"
+              echo "$so"
+
+              OPENCL_FOUND=1
+            fi
+
+          done < <(
+            find \
+              /tmp/aar-check/jni/arm64-v8a \
+              -name '*.so' \
+              -type f
+          )
+
+          test "$OPENCL_FOUND" -eq 1
+
+          echo
+          echo "========================================"
+          echo "OpenCL native symbols: PASS"
+          echo "========================================"
+
+
+      # ============================================================
+      # 20. VERIFY 16 KB ELF LOAD ALIGNMENT
+      # ============================================================
+      - name: Verify 16 KB ELF alignment
+        run: |
+          set -euo pipefail
+
+          echo "=== Checking all arm64-v8a ELF LOAD segments ==="
 
           found=0
 
@@ -637,17 +950,22 @@ jobs:
 
             while IFS= read -r align; do
 
-              case "$align" in
-                0x4000|0x8000|0x10000|0x20000|0x40000|0x80000|0x100000)
-                  ;;
-                *)
-                  echo
-                  echo "ERROR:"
-                  echo "$so has LOAD alignment $align"
-                  echo "Required: >= 16 KB"
-                  exit 1
-                  ;;
-              esac
+              # Bash supports hexadecimal arithmetic.
+              align_value=$((align))
+
+              echo \
+                "LOAD alignment: $align ($align_value bytes)"
+
+              if [ "$align_value" -lt 16384 ]; then
+
+                echo
+                echo "ERROR:"
+                echo "$so has LOAD alignment $align"
+                echo
+                echo "Required minimum: 16384 bytes (16 KB)"
+
+                exit 1
+              fi
 
             done <<< "$aligns"
 
@@ -667,7 +985,7 @@ jobs:
 
 
       # ============================================================
-      # 18. CREATE DEBUG KEYSTORE
+      # 21. CREATE DEBUG KEYSTORE
       # ============================================================
       - name: Create debug keystore
         run: |
@@ -685,11 +1003,12 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          test -f debug.keystore
+          test -f \
+            debug.keystore
 
 
       # ============================================================
-      # 19. BUILD ANDROID APP
+      # 22. BUILD ANDROID APP
       # ============================================================
       - name: Build Android app against custom AAR
         run: |
@@ -702,7 +1021,7 @@ jobs:
 
 
       # ============================================================
-      # 20. UPLOAD AAR
+      # 23. UPLOAD AAR
       # ============================================================
       - name: Upload custom AAR
         uses: actions/upload-artifact@v4
@@ -713,7 +1032,7 @@ jobs:
 
 
       # ============================================================
-      # 21. UPLOAD APK
+      # 24. UPLOAD APK
       # ============================================================
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -724,7 +1043,7 @@ jobs:
 
 
       # ============================================================
-      # 22. UPLOAD BUILD LOG
+      # 25. UPLOAD FFMPEGKIT BUILD LOG
       # ============================================================
       - name: Upload FFmpegKit build log
         if: always()
