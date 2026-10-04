@@ -344,8 +344,9 @@ jobs:
 
       - name: Build Android app against custom AAR
         run: |
-          chmod +x ./gradlew
-          ./gradlew --no-daemon --stacktrace assembleDebug
+          set -eux
+
+          gradle --no-daemon --stacktrace assembleDebug
 
       - name: Upload custom AAR
         uses: actions/upload-artifact@v4
