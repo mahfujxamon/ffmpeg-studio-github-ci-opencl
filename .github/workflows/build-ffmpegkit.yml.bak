@@ -64,20 +64,12 @@ jobs:
 
       - name: Apply OpenCL runtime patch
         run: |
-          set -euo pipefail
-
           cd ffmpegkit
-
-          echo "Checking FFmpegKit source layout..."
-          test -f configure
-          test -f libavfilter/opencl.c
-          test -f libavfilter/opencl.h
-          test -f libavutil/hwcontext_opencl.c
-          test -f libavutil/Makefile
-
-          echo "FFmpeg source layout: OK"
-
+          # The patch contains the loader implementation and FFmpeg integration.
           git apply "../patches/ffmpeg-opencl-runtime.patch"
+          # Remove the stale auxiliary-patch invocation carried by the historical patch.
+          python3 -c 'from pathlib import Path; p=Path("android-8.1-lts/scripts/android/ffmpeg.sh"); s=p.read_text(); block="""if [[ \"${FFMPEGKIT_OPENCL:-0}\" == \"1\" ]]; then\n  rm -f libavutil/opencl_loader.c libavutil/opencl_loader.h\n  git apply \"${BASEDIR}/tools/opencl/libavutil-opencl-loader.patch\" 1>>\"${BASEDIR}\"/build.log 2>&1 || return 1\nfi\n\n"""; assert block in s, "stale auxiliary OpenCL patch block not found"; p.write_text(s.replace(block,"",1))'
+
 
       - name: Build arm64-v8a FFmpegKit AAR
         env:
