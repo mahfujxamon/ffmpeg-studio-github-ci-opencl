@@ -72,7 +72,6 @@ jobs:
             ragel \
             groff \
             gtk-doc-tools \
-            libtasn1-1 \
             make \
             unzip \
             python3 \
