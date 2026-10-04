@@ -84,7 +84,8 @@ jobs:
           echo "=== Host tools ==="
           command -v autoconf
           command -v automake
-          command -v libtool
+          command -v libtoolize || true
+          command -v libtool || true
           command -v pkg-config
           command -v make
           command -v gcc
@@ -93,10 +94,18 @@ jobs:
           command -v groff
           command -v autopoint
 
-          echo "=== Compiler versions ==="
+          echo "=== Tool versions ==="
+          autoconf --version | head -n 1
+          automake --version | head -n 1
+          libtoolize --version | head -n 1
+          pkg-config --version
           gcc --version | head -n 1
           clang --version | head -n 1
           make --version | head -n 1
+
+          echo "=== Check libtool package ==="
+          dpkg -l libtool || true
+          dpkg -L libtool || true
 
           echo "=== Android SDK/NDK ==="
           echo "ANDROID_HOME=${ANDROID_HOME}"
