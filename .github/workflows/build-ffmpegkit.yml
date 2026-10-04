@@ -44,11 +44,70 @@ jobs:
 
       - name: Install FFmpegKit host dependencies
         run: |
+          set -eux
+
           sudo apt-get update
+
           sudo apt-get install -y \
-            autoconf automake libtool texinfo pkg-config \
-            yasm nasm cmake make gcc g++ git wget curl unzip \
-            python3 perl
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            curl \
+            git \
+            doxygen \
+            nasm \
+            cmake \
+            gcc \
+            g++ \
+            gperf \
+            texinfo \
+            yasm \
+            bison \
+            autogen \
+            wget \
+            autopoint \
+            meson \
+            ninja-build \
+            ragel \
+            groff \
+            gtk-doc-tools \
+            libtasn1-1 \
+            make \
+            unzip \
+            python3 \
+            perl
+
+      - name: Verify build toolchain
+        run: |
+          set -eux
+
+          echo "=== Host tools ==="
+          command -v autoconf
+          command -v automake
+          command -v libtool
+          command -v pkg-config
+          command -v make
+          command -v gcc
+          command -v g++
+          command -v clang
+          command -v groff
+          command -v autopoint
+
+          echo "=== Compiler versions ==="
+          gcc --version | head -n 1
+          clang --version | head -n 1
+          make --version | head -n 1
+
+          echo "=== Android SDK/NDK ==="
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
+          echo "ANDROID_NDK_VERSION=${ANDROID_NDK_VERSION}"
+
+          test -d "${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
+          test -f "${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}/source.properties"
+
+          cat "${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}/source.properties"
 
       - name: Clone pinned FFmpegKit source
         run: |
