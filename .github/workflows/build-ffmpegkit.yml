@@ -277,6 +277,9 @@ jobs:
         run: |
           cd ffmpegkit/android-8.1-lts
           chmod +x android.sh
+          
+          set +e
+          
           ./android.sh \
             --lts \
             --full \
@@ -287,6 +290,46 @@ jobs:
             --disable-x86 \
             --disable-x86-64 \
             --no-output-redirection
+            
+          BUILD_STATUS=$?
+          
+          echo
+          echo "========================================"
+          echo "===== GnuTLS FAILURE DIAGNOSTICS ====="
+          echo "========================================"
+          
+          echo
+          echo "===== GnuTLS files ====="
+          find . -type f \( \
+            -path '*gnutls*/configure' -o \
+            -path '*gnutls*/config.log' -o \
+            -path '*gnutls*/build.log' \
+          \) -print 2>/dev/null | head -100
+          
+          echo
+          echo "===== GnuTLS configure malformed sizeof ====="
+          grep -R -n -E \
+            'sizeof[[:space:]]*\([[:space:]]*\(' \
+            src 2>/dev/null | head -100 || true
+            
+          echo
+          echo "===== GnuTLS config.log errors ====="
+          find . -type f -path '*gnutls*/config.log' -print0 2>/dev/null |
+            xargs -0 -r grep -n -E \
+              'error:|ERROR:|failed|cannot|not found|undefined reference|expected expression' \
+              | tail -200 || true
+              
+          echo
+          echo "===== Main build.log GnuTLS section ====="
+          grep -n -i -C 8 \
+            'gnutls' \
+            build.log 2>/dev/null | tail -300 || true
+            
+          echo
+          echo "===== Last 250 build.log lines ====="
+          tail -250 build.log 2>/dev/null || true
+          
+          exit $BUILD_STATUS
 
       - name: Locate custom AAR
         run: |
