@@ -143,10 +143,40 @@ jobs:
           fi
           '''
 
+          if "PATCH_GNUTLS_MALFORMED_SIZEOF" in text:
+              print("GnuTLS patch already installed")
+              sys.exit(0)
+
+          if marker not in text:
+              print("ERROR: GnuTLS bootstrap marker not found")
+              sys.exit(1)
+
           patch = marker + r'''
-          # FIX OLD AUTOCONF sizeof(TYPE) PROBES FOR MODERN CLANG
-          if [[ -f "${BASEDIR}"/src/"${LIB_NAME}"/configure ]]; then
-            python3 - "${BASEDIR}/src/${LIB_NAME}/configure" <<'PYFIX'
+          # PATCH_GNUTLS_MALFORMED_SIZEOF
+          # Old Autoconf/Gnulib generates invalid C:
+          #
+          #     sizeof ((pid_t))
+          #
+          # Modern Clang rejects this with:
+          #
+          #     error: expected expression
+          #
+          # Normalize:
+          #
+          #     sizeof ((TYPE))
+          #
+          # to:
+          #
+          #     sizeof (TYPE)
+
+          GNUTLS_CONFIGURE="${BASEDIR}/src/${LIB_NAME}/configure"
+
+          if [[ ! -f "${GNUTLS_CONFIGURE}" ]]; then
+            echo "ERROR: GnuTLS configure was not generated: ${GNUTLS_CONFIGURE}"
+            return 1
+          fi
+
+          python3 - "${GNUTLS_CONFIGURE}" <<'PYFIX'
           from pathlib import Path
           import re
           import sys
@@ -154,41 +184,48 @@ jobs:
           cfg = Path(sys.argv[1])
           data = cfg.read_text()
 
-          # Autoconf/Gnulib generated invalid C such as:
-          #   sizeof ((pid_t))
-          # Modern Clang rejects this as "expected expression".
-          #
-          # Normalize every sizeof ((TYPE)) occurrence to sizeof (TYPE).
-          fixed, count = re.subn(
-              r'(?<![A-Za-z0-9_])sizeof\s*\(\s*\(\s*([^)]+?)\s*\)\s*\)',
-              r'sizeof (\1)',
-              data,
+          pattern = re.compile(
+              r'(\bsizeof\s*\(\s*)\(([^()\n]+)\)(\s*\))'
+          )
+
+          fixed, count = pattern.subn(
+              r'\1\2\3',
+              data
           )
 
           cfg.write_text(fixed)
 
-          print(f"Fixed malformed sizeof probes: {count}")
+          print(f"GnuTLS malformed sizeof fixes: {count}")
 
-          if re.search(r'\bsizeof\s*\(\s*\(', fixed):
-              print("ERROR: malformed sizeof ((...)) still remains")
+          remaining = re.findall(
+              r'\bsizeof\s*\(\s*\([^()\n]+\)\s*\)',
+              fixed
+          )
+
+          if remaining:
+              print("ERROR: malformed sizeof ((TYPE)) still remains")
+              for item in remaining[:20]:
+                  print(item)
               sys.exit(1)
+
+          print("GnuTLS configure sizeof() validation: OK")
           PYFIX
+
+          echo "=== Remaining malformed sizeof probes ==="
+          if grep -nE 'sizeof[[:space:]]*\([[:space:]]*\(' \
+              "${GNUTLS_CONFIGURE}" | head -50; then
+            echo "ERROR: malformed sizeof probe remains"
+            return 1
           fi
+
+          echo "No malformed sizeof ((TYPE)) probes remain."
           '''
 
-          if 'FIX OLD AUTOCONF sizeof(TYPE) PROBES FOR MODERN CLANG' in text:
-              print("GnuTLS patch already present")
-              sys.exit(0)
-
-          if marker not in text:
-              print("ERROR: expected GnuTLS configure block not found")
-              sys.exit(1)
-
           path.write_text(text.replace(marker, patch))
-          print("GnuTLS generic sizeof patch installed")
+          print("GnuTLS generic configure patch installed")
           PY
 
-          grep -n "FIX OLD AUTOCONF sizeof(TYPE)" "$GNUTLS_SCRIPT"
+          grep -n "PATCH_GNUTLS_MALFORMED_SIZEOF" "$GNUTLS_SCRIPT"
 
       - name: Add OpenCL headers
         if: ${{ hashFiles('patches/ffmpeg-opencl-runtime.patch') != '' }}
@@ -229,14 +266,6 @@ jobs:
 #          echo "FFmpeg source layout: OK"
 #
 #          git apply "../patches/ffmpeg-opencl-runtime.patch"
-
-      - name: Inspect GnuTLS configure
-        run: |
-          set -eux
-
-          find ffmpegkit -path '*gnutls*/configure' -type f -print || true
-
-          grep -R -n -F 'sizeof ((' ffmpegkit 2>/dev/null | head -50 || true
 
       - name: Build arm64-v8a FFmpegKit AAR
         env:
