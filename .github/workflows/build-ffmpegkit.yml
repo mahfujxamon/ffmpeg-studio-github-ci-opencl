@@ -1248,7 +1248,46 @@ jobs:
 
 
       # ============================================================
-      # 26. Upload AAR
+      # 26. Verify local-AAR runtime dependency packaging
+      #
+      # A file-based AAR has no Maven POM, so smart-exception-java must
+      # be a direct app dependency. This prevents the previous
+      # NoClassDefFoundError from returning after a successful native build.
+      # ============================================================
+      - name: Verify Smart Exception runtime dependency
+        run: |
+          set -euxo pipefail
+
+          gradle \
+            --no-daemon \
+            :app:dependencies \
+            --configuration debugRuntimeClasspath \
+            > /tmp/debug-runtime-classpath.txt
+
+          grep -F \
+            'com.arthenica:smart-exception-java:0.2.1' \
+            /tmp/debug-runtime-classpath.txt
+
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+
+          found=0
+          while IFS= read -r dex; do
+            if unzip -p "$APK" "$dex" 2>/dev/null \
+              | strings \
+              | grep -Fq \
+              'Lcom/arthenica/smartexception/java/Exceptions;'; then
+              echo "Found Smart Exception class in $dex"
+              found=1
+              break
+            fi
+          done < <(unzip -Z1 "$APK" 'classes*.dex')
+
+          test "$found" -eq 1
+
+
+      # ============================================================
+      # 27. Upload AAR
       # ============================================================
       - name: Upload custom AAR
         uses: actions/upload-artifact@v4
@@ -1259,7 +1298,7 @@ jobs:
 
 
       # ============================================================
-      # 27. Upload APK
+      # 28. Upload APK
       # ============================================================
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -1270,7 +1309,7 @@ jobs:
 
 
       # ============================================================
-      # 28. Upload FFmpegKit build logs
+      # 29. Upload FFmpegKit build logs
       # ============================================================
       - name: Upload FFmpegKit build logs
         if: always()
