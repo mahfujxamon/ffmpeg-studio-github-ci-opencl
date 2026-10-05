@@ -14,6 +14,7 @@ import java.io.File
 object OpenClRuntime {
 
     const val OCL_ICD_FILENAMES = "OCL_ICD_FILENAMES"
+    const val OCL_ICD_ENABLE_TRACE = "OCL_ICD_ENABLE_TRACE"
 
     private val standardVendorDirectories = listOf(
         "/system/vendor/Khronos/OpenCL/vendors",
@@ -22,6 +23,27 @@ object OpenClRuntime {
         "/system/etc/OpenCL/vendors",
         "/vendor/etc/OpenCL/vendors",
         "/odm/etc/OpenCL/vendors"
+    )
+
+    /**
+     * Android devices are not required to expose a separate .icd registration
+     * file to ordinary apps. In particular, the platform may expose the
+     * vendor OpenCL entrypoint as libOpenCL.so directly. The Khronos loader
+     * accepts library names as OCL_ICD_FILENAMES, so try the generic Android
+     * OpenCL names as well as any discovered .icd entries.
+     *
+     * No GPU/vendor implementation is bundled by the app. These are only
+     * runtime lookup candidates.
+     */
+    private val genericRuntimeIcdCandidates = listOf(
+        "libOpenCL.so",
+        "libOpenCL.so.1",
+        "/vendor/lib64/libOpenCL.so",
+        "/system/vendor/lib64/libOpenCL.so",
+        "/odm/lib64/libOpenCL.so",
+        "/vendor/lib/libOpenCL.so",
+        "/system/vendor/lib/libOpenCL.so",
+        "/odm/lib/libOpenCL.so"
     )
 
     data class Preparation(
@@ -63,24 +85,35 @@ object OpenClRuntime {
         }
 
         val discovered = discoverIcdLibraries()
+        val candidates = linkedSetOf<String>().apply {
+            addAll(discovered)
+            addAll(genericRuntimeIcdCandidates)
+        }.toList()
 
-        if (discovered.isNotEmpty()) {
-            val value = discovered.joinToString(File.pathSeparator)
+        if (candidates.isNotEmpty()) {
+            val value = candidates.joinToString(File.pathSeparator)
             val configured = try {
                 Os.setenv(OCL_ICD_FILENAMES, value, true)
+                // Enable Khronos loader trace so failed ICD loads are visible
+                // in the FFmpeg log instead of being reduced to -1001.
+                Os.setenv(OCL_ICD_ENABLE_TRACE, "1", true)
                 true
-            } catch (t: Throwable) {
+            } catch (_: Throwable) {
                 false
             }
 
             val result = Preparation(
                 configured = configured,
-                icdLibraries = discovered,
+                icdLibraries = candidates,
                 searchedDirectories = searched,
                 message = if (configured) {
-                    "Configured ${discovered.size} Android OpenCL ICD implementation(s)."
+                    if (discovered.isNotEmpty()) {
+                        "Configured discovered ICD(s) plus generic Android OpenCL runtime candidates."
+                    } else {
+                        "No .icd file found; configured generic Android OpenCL runtime candidates."
+                    }
                 } else {
-                    "Found ${discovered.size} ICD implementation(s), but process environment setup failed."
+                    "OpenCL runtime candidates found, but process environment setup failed."
                 }
             )
             preparationCache = result
@@ -91,7 +124,7 @@ object OpenClRuntime {
             configured = false,
             icdLibraries = emptyList(),
             searchedDirectories = searched,
-            message = "No .icd registration file was discovered; Khronos loader default discovery remains enabled."
+            message = "No OpenCL runtime candidates were discovered; Khronos loader default discovery remains enabled."
         )
         preparationCache = result
         return result
