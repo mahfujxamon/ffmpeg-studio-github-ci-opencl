@@ -505,27 +505,34 @@ jobs:
 
           OPENCL_HEADERS="${GITHUB_WORKSPACE}/opencl-headers"
           OPENCL_LOADER="${GITHUB_WORKSPACE}/icd-loader/build/libOpenCL.a"
+          OPENCL_LOADER_DIR="${GITHUB_WORKSPACE}/icd-loader/build"
 
           test -f "$FFMPEG_SCRIPT"
           test -f "$OPENCL_HEADERS/CL/cl.h"
-          test -f "$OPENCL_HEADERS/OpenCL/cl.h"
           test -f "$OPENCL_LOADER"
+          test -d "$OPENCL_LOADER_DIR"
+
+          echo "========================================"
+          echo "OPENCL INPUTS"
+          echo "========================================"
+          echo "Headers      : $OPENCL_HEADERS"
+          echo "Loader       : $OPENCL_LOADER"
+          echo "Loader dir   : $OPENCL_LOADER_DIR"
 
           python3 \
-            - "$FFMPEG_SCRIPT" "$OPENCL_HEADERS" "$OPENCL_LOADER" \
+            - "$FFMPEG_SCRIPT" "$OPENCL_HEADERS" "$OPENCL_LOADER_DIR" \
             <<'PY'
           from pathlib import Path
           import sys
 
           script = Path(sys.argv[1])
           headers = sys.argv[2]
-          loader = sys.argv[3]
+          loader_dir = sys.argv[3]
 
           text = script.read_text()
 
           # --------------------------------------------------------
-          # Remove ONLY our previous generated OpenCL block.
-          # This marker makes repeated workflow edits safe.
+          # Remove only our previous generated OpenCL block.
           # --------------------------------------------------------
           begin_marker = "# BEGIN FFMPEGKIT_KHRONOS_OPENCL"
           end_marker = "# END FFMPEGKIT_KHRONOS_OPENCL"
@@ -534,15 +541,10 @@ jobs:
               start = text.index(begin_marker)
               end = text.index(end_marker, start) + len(end_marker)
 
-              text = (
-                  text[:start]
-                  + text[end:]
-              )
+              text = text[:start] + text[end:]
 
           # --------------------------------------------------------
-          # FFmpegKit Android currently enables OpenSSL at line ~206.
-          #
-          # Replace that exact command with disable-openssl.
+          # Disable OpenSSL in Android FFmpeg configure.
           # --------------------------------------------------------
           openssl_enable = 'CONFIGURE_POSTFIX+=" --enable-openssl"'
 
@@ -552,12 +554,12 @@ jobs:
                   'CONFIGURE_POSTFIX+=" --disable-openssl"',
                   1
               )
-              print("Replaced Android FFmpeg OpenSSL enable with disable.")
+              print("OpenSSL enable flag replaced with disable.")
           else:
-              print("WARNING: exact --enable-openssl line not found.")
+              print("WARNING: --enable-openssl line was not found.")
 
           # --------------------------------------------------------
-          # CONFIGURE_POSTFIX must exist.
+          # CONFIGURE_POSTFIX anchor.
           # --------------------------------------------------------
           anchor = 'CONFIGURE_POSTFIX=""'
 
@@ -567,20 +569,29 @@ jobs:
               )
 
           # --------------------------------------------------------
-          # OpenCL configuration.
+          # IMPORTANT:
           #
-          # Two separate --extra-libs options are intentional:
+          # FFmpeg's own OpenCL check uses:
           #
-          #   --extra-libs=/absolute/path/libOpenCL.a
-          #   --extra-libs=-ldl
+          #     -lOpenCL
           #
-          # Do NOT put "-ldl" outside --extra-libs.
+          # Therefore we MUST provide:
+          #
+          #     -L<directory-containing-libOpenCL.a>
+          #
+          # Do NOT pass the absolute .a file as --extra-libs.
+          #
+          # -ldl is supplied separately.
           # --------------------------------------------------------
           opencl_block = f'''# BEGIN FFMPEGKIT_KHRONOS_OPENCL
-          # Official Khronos OpenCL-Headers + OpenCL-ICD-Loader.
+          # Official Khronos OpenCL-Headers.
+          # Official Khronos OpenCL-ICD-Loader static archive.
+          #
+          # FFmpeg configure itself supplies -lOpenCL.
+          # We only need to expose the loader directory.
           CONFIGURE_POSTFIX+=" --enable-opencl"
           CONFIGURE_POSTFIX+=" --extra-cflags=-I{headers}"
-          CONFIGURE_POSTFIX+=" --extra-libs={loader}"
+          CONFIGURE_POSTFIX+=" --extra-ldflags=-L{loader_dir}"
           CONFIGURE_POSTFIX+=" --extra-libs=-ldl"
           # END FFMPEGKIT_KHRONOS_OPENCL
           '''
@@ -592,20 +603,17 @@ jobs:
           )
 
           # --------------------------------------------------------
-          # Final hard override.
-          #
-          # Even if another option later adds --enable-openssl,
-          # this puts --disable-openssl at the end of CONFIGURE_POSTFIX.
+          # Final OpenSSL override.
           # --------------------------------------------------------
-          final_ssl_anchor = '# FFMPEGKIT_FINAL_SSL_OVERRIDE'
+          final_ssl_marker = "# FFMPEGKIT_FINAL_SSL_OVERRIDE"
 
-          if final_ssl_anchor not in text:
+          if final_ssl_marker not in text:
+
               final_ssl_block = f'''
-          {final_ssl_anchor}
+          {final_ssl_marker}
           CONFIGURE_POSTFIX+=" --disable-openssl"
           '''
 
-              # Put the final override immediately before configure.
               configure_anchor = './configure \\'
 
               if configure_anchor not in text:
@@ -622,21 +630,31 @@ jobs:
           script.write_text(text)
 
           print("========================================")
-          print("FFmpeg OpenCL configuration injected")
+          print("FFmpeg OpenCL configuration installed")
           print("========================================")
-          print(f"Headers : {headers}")
-          print(f"Loader  : {loader}")
+          print(f"Headers    : {headers}")
+          print(f"Loader dir : {loader_dir}")
           PY
 
           echo
           echo "========================================"
-          echo "FINAL FFMPEG SCRIPT OPENCL/SSL LINES"
+          echo "FINAL OPENCL/SSL CONFIGURATION"
           echo "========================================"
 
           grep -nE \
-            'FFMPEGKIT_KHRONOS_OPENCL|enable-opencl|extra-cflags|extra-libs|enable-openssl|disable-openssl|FINAL_SSL_OVERRIDE' \
+            'FFMPEGKIT_KHRONOS_OPENCL|enable-opencl|extra-cflags|extra-ldflags|extra-libs|enable-openssl|disable-openssl|FINAL_SSL_OVERRIDE' \
             "$FFMPEG_SCRIPT" \
             || true
+
+          echo
+          echo "========================================"
+          echo "VERIFY LOADER"
+          echo "========================================"
+
+          test -f "${OPENCL_LOADER_DIR}/libOpenCL.a"
+
+          ls -lh \
+            "${OPENCL_LOADER_DIR}/libOpenCL.a"
 
 
       # ============================================================
@@ -651,7 +669,7 @@ jobs:
           test -f "$FFMPEG_SCRIPT"
 
           echo "========================================"
-          echo "OPENCL CONFIGURATION"
+          echo "OPENCL"
           echo "========================================"
 
           grep -n \
@@ -663,7 +681,11 @@ jobs:
             "$FFMPEG_SCRIPT"
 
           grep -n \
-            'CONFIGURE_POSTFIX+=" --extra-libs=' \
+            'CONFIGURE_POSTFIX+=" --extra-ldflags=-L' \
+            "$FFMPEG_SCRIPT"
+
+          grep -n \
+            'CONFIGURE_POSTFIX+=" --extra-libs=-ldl"' \
             "$FFMPEG_SCRIPT"
 
           echo
@@ -680,10 +702,8 @@ jobs:
           echo "OPENSSL"
           echo "========================================"
 
-          # There must NOT be an enable-openssl option.
           if grep -n -- '--enable-openssl' "$FFMPEG_SCRIPT"; then
-            echo
-            echo "ERROR: --enable-openssl is still present."
+            echo "ERROR: --enable-openssl is still enabled."
             exit 1
           fi
 
@@ -707,14 +727,8 @@ jobs:
 
           echo
           echo "========================================"
-          echo "CONFIGURATION PASS"
+          echo "OPENCL CONFIGURATION: PASS"
           echo "========================================"
-
-          echo "OpenCL enabled      : PASS"
-          echo "Khronos headers     : PASS"
-          echo "Khronos loader      : PASS"
-          echo "GnuTLS enabled      : PASS"
-          echo "OpenSSL disabled    : PASS"
 
 
       # ============================================================
@@ -971,6 +985,36 @@ jobs:
             || true
 
           exit "$BUILD_STATUS"
+
+
+      # ============================================================
+      # 19.5. Diagnose FFmpeg OpenCL linker test
+      # ============================================================
+      - name: Diagnose FFmpeg OpenCL linker test
+        if: always()
+        run: |
+          set -euxo pipefail
+
+          echo "========================================"
+          echo "SEARCHING OPENCL LINK TEST"
+          echo "========================================"
+
+          find \
+            ffmpegkit/android-8.1-lts/src/ffmpeg \
+            -type f \
+            -path '*/ffbuild/config.log' \
+            -print \
+            2>/dev/null \
+            | while read -r log; do
+                echo
+                echo "===== $log ====="
+
+                grep -n -i -E \
+                  'opencl|clEnqueueNDRangeKernel|OpenCL/cl.h|CL/cl.h|-lOpenCL|libOpenCL|extra-ldflags' \
+                  "$log" \
+                  | tail -250 \
+                  || true
+              done
 
 
       # ============================================================
