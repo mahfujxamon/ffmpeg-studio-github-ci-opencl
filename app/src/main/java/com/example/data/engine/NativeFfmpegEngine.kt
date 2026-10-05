@@ -98,7 +98,8 @@ class NativeFfmpegEngine : ExecutionEngine {
      * the exact FFmpegKit/OpenCL runtime path could not create an OpenCL device.
      */
     fun probeOpenClAsync(onComplete: (OpenClRuntime.ProbeResult) -> Unit) {
-        ensureOpenClStartup()
+        val preparation = ensureOpenClStartup()
+        OpenClRuntime.clearProbe()
 
         val probeCommand =
             "-hide_banner -nostdin -loglevel error " +
@@ -123,9 +124,18 @@ class NativeFfmpegEngine : ExecutionEngine {
                     }
                 }
 
+                val preparationDetail = buildString {
+                    append(preparation.message)
+                    if (preparation.icdLibraries.isNotEmpty()) {
+                        append(" ICDs=")
+                        append(preparation.icdLibraries.joinToString())
+                    }
+                    append(" Probe=")
+                    append(detail)
+                }
                 val result = OpenClRuntime.ProbeResult(
                     available = success,
-                    detail = detail
+                    detail = preparationDetail
                 )
                 OpenClRuntime.setProbeResult(result)
                 onComplete(result)
@@ -133,7 +143,7 @@ class NativeFfmpegEngine : ExecutionEngine {
         } catch (t: Throwable) {
             val result = OpenClRuntime.ProbeResult(
                 available = false,
-                detail = buildDetailedErrorChain(t)
+                detail = "${preparation.message} Probe exception=${buildDetailedErrorChain(t)}"
             )
             OpenClRuntime.setProbeResult(result)
             onComplete(result)
