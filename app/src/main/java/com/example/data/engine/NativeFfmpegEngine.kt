@@ -12,6 +12,12 @@ import java.io.File
 
 class NativeFfmpegEngine : ExecutionEngine {
 
+    init {
+        // Must happen before the first FFmpegKit native call so the static
+        // Khronos loader sees OCL_ICD_FILENAMES during its initialization.
+        OpenClRuntime.prepare()
+    }
+
     override val name: String = "Native FFmpegKit"
 
     override val processingMode: String
@@ -38,7 +44,11 @@ class NativeFfmpegEngine : ExecutionEngine {
                 abi = abi,
                 hasHwAvc = hasHardwareAvcEncoder(),
                 hasBoxblur = true,
-                buildVariant = "Full-GPL (Standard Filters & NEON Enabled)"
+                buildVariant = "Full-GPL (Standard Filters & NEON Enabled)",
+                openClConfigured = OpenClRuntime.prepare().configured,
+                openClIcdLibraries = OpenClRuntime.prepare().icdLibraries,
+                openClProbeAvailable = OpenClRuntime.lastProbe()?.available,
+                openClProbeDetail = OpenClRuntime.lastProbe()?.detail
             )
         } catch (t: Throwable) {
             val causeChain = buildDetailedErrorChain(t)
@@ -60,6 +70,63 @@ class NativeFfmpegEngine : ExecutionEngine {
             command.contains("-c copy", ignoreCase = true) ||
             command.contains("-c:v copy", ignoreCase = true) -> "Stream Copy"
             else -> "Software"
+        }
+    }
+
+    fun currentOpenClPreparation(): OpenClRuntime.Preparation = OpenClRuntime.prepare()
+
+    fun currentOpenClProbe(): OpenClRuntime.ProbeResult? = OpenClRuntime.lastProbe()
+
+    fun isOpenClRequested(command: String): Boolean {
+        val normalized = command.lowercase()
+        return normalized.contains("opencl") || normalized.contains("_opencl")
+    }
+
+    /**
+     * Uses the actual FFmpeg binary to initialize an OpenCL hardware device.
+     * This is stronger than merely checking for a library file: failure means
+     * the exact FFmpegKit/OpenCL runtime path could not create an OpenCL device.
+     */
+    fun probeOpenClAsync(onComplete: (OpenClRuntime.ProbeResult) -> Unit) {
+        OpenClRuntime.prepare()
+
+        val probeCommand =
+            "-hide_banner -nostdin -loglevel error " +
+                "-init_hw_device opencl=ocl " +
+                "-f lavfi -i color=c=black:s=16x16:r=1 " +
+                "-frames:v 1 -f null -"
+
+        try {
+            FFmpegKit.executeAsync(
+                probeCommand
+            ) { session ->
+                val success = ReturnCode.isSuccess(session.returnCode)
+                val detail = if (success) {
+                    "OpenCL device initialization succeeded."
+                } else {
+                    val failure = session.failStackTrace
+                    val logs = session.logsAsString
+                    when {
+                        !failure.isNullOrBlank() -> failure.takeLast(800)
+                        !logs.isNullOrBlank() -> logs.takeLast(800)
+                        else -> "FFmpeg OpenCL probe failed with return code ${session.returnCode?.value}."
+                    }
+                }
+
+                val result = OpenClRuntime.ProbeResult(
+                    available = success,
+                    detail = detail
+                )
+                OpenClRuntime.setProbeResult(result)
+                onComplete(result)
+            }
+        } catch (t: Throwable) {
+            val result = OpenClRuntime.ProbeResult(
+                available = false,
+                detail = buildDetailedErrorChain(t)
+            )
+            OpenClRuntime.setProbeResult(result)
+            onComplete(result)
         }
     }
 

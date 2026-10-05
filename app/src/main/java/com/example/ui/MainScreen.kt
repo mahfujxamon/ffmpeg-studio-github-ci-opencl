@@ -358,7 +358,18 @@ private fun AppHeader(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 val statusText = when (nativeStatus) {
-                    is NativeRuntimeStatus.Ready -> "Native FFmpeg: READY (FFmpegKit ${nativeStatus.version} • ${nativeStatus.abi})"
+                    is NativeRuntimeStatus.Ready -> {
+                        val openClText = when (nativeStatus.openClProbeAvailable) {
+                            true -> "OpenCL: READY"
+                            false -> "OpenCL: UNAVAILABLE"
+                            null -> if (nativeStatus.openClConfigured) {
+                                "OpenCL: CONFIGURED / CHECKING"
+                            } else {
+                                "OpenCL: DEFAULT DISCOVERY"
+                            }
+                        }
+                        "Native FFmpeg: READY • FFmpegKit ${nativeStatus.version} • ${nativeStatus.abi} • $openClText"
+                    }
                     is NativeRuntimeStatus.Unavailable -> "Native FFmpeg: UNAVAILABLE (${nativeStatus.rootCause.take(60)})"
                 }
                 Text(

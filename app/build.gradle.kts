@@ -85,6 +85,11 @@ dependencies {
   } else {
     implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full-gpl:8.1.9")
   }
+
+  // Local AARs do not carry the Maven POM, so this transitive runtime dependency
+  // must be declared explicitly. FFmpegKit 8.1.9 uses it from FFmpegKitConfig
+  // error/exception paths as well as normal session handling.
+  implementation("com.arthenica:smart-exception-java:0.2.1")
   
   // implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)

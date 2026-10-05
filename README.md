@@ -20,3 +20,12 @@ View your app in AI Studio: https://ai.studio/apps/57e0bf4e-c3eb-4ec1-97f9-996db
 5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
 6. Run the app on an emulator or physical device
 7. If you have already published your app in AI Studio, please [request upload key reset](https://support.google.com/googleplay/android-developer/answer/9842756#zippy=%2Crequest-an-upload-key-reset) in Google Play Console.
+
+
+## Custom OpenCL runtime
+
+This build links the official Khronos OpenCL ICD Loader. At app startup, the runtime scans Android OpenCL ICD registration directories and sets `OCL_ICD_FILENAMES` from discovered `.icd` files before the first FFmpegKit native call. Vendor OpenCL implementations are not bundled.
+
+The app performs a small FFmpeg-backed OpenCL initialization probe and reports whether an OpenCL device could actually be initialized. A successful FFmpeg build alone is not treated as proof of GPU execution.
+
+Note: OpenCL is not an automatic replacement for every CPU filter. Commands must request an OpenCL-capable filter/hardware path to use GPU processing. When the command does not request OpenCL, the existing CPU filter path remains unchanged.
