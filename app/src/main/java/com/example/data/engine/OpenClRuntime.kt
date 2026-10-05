@@ -64,6 +64,15 @@ object OpenClRuntime {
     @Volatile
     private var probeCache: ProbeResult? = null
 
+    /**
+     * Explicit process-start bootstrap entrypoint. NativeFfmpegEngine calls
+     * this before any FFmpegKit/native OpenCL call. Keeping the entrypoint
+     * here makes the startup contract explicit instead of relying on a file
+     * replacement or an incidental ViewModel call.
+     */
+    @Synchronized
+    fun startup(): Preparation = prepare()
+
     @Synchronized
     fun prepare(): Preparation {
         preparationCache?.let { return it }

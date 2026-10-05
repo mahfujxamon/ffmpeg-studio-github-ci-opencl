@@ -13,10 +13,19 @@ import java.io.File
 class NativeFfmpegEngine : ExecutionEngine {
 
     init {
-        // Must happen before the first FFmpegKit native call so the static
-        // Khronos loader sees OCL_ICD_FILENAMES during its initialization.
-        OpenClRuntime.prepare()
+        // Hard startup boundary: configure OpenCL before ANY FFmpegKit/native
+        // call. This is intentionally owned by the native engine, so runtime
+        // discovery does not depend on a UI/ViewModel lifecycle.
+        OpenClRuntime.startup()
     }
+
+    /**
+     * Re-assert the OpenCL bootstrap immediately before a native FFmpeg call.
+     * OpenClRuntime is idempotent/cached, so this is cheap and protects against
+     * future call-site changes that might bypass the constructor path.
+     */
+    private fun ensureOpenClStartup(): OpenClRuntime.Preparation =
+        OpenClRuntime.startup()
 
     override val name: String = "Native FFmpegKit"
 
@@ -33,6 +42,7 @@ class NativeFfmpegEngine : ExecutionEngine {
      */
     fun checkNativeRuntime(): NativeRuntimeStatus {
         return try {
+            val openClPreparation = ensureOpenClStartup()
             val version = FFmpegKitConfig.getVersion() ?: "v8.1.9"
             val abi = try {
                 AbiDetect.getAbi() ?: "unknown"
@@ -45,8 +55,8 @@ class NativeFfmpegEngine : ExecutionEngine {
                 hasHwAvc = hasHardwareAvcEncoder(),
                 hasBoxblur = true,
                 buildVariant = "Full-GPL (Standard Filters & NEON Enabled)",
-                openClConfigured = OpenClRuntime.prepare().configured,
-                openClIcdLibraries = OpenClRuntime.prepare().icdLibraries,
+                openClConfigured = openClPreparation.configured,
+                openClIcdLibraries = openClPreparation.icdLibraries,
                 openClProbeAvailable = OpenClRuntime.lastProbe()?.available,
                 openClProbeDetail = OpenClRuntime.lastProbe()?.detail
             )
@@ -73,7 +83,7 @@ class NativeFfmpegEngine : ExecutionEngine {
         }
     }
 
-    fun currentOpenClPreparation(): OpenClRuntime.Preparation = OpenClRuntime.prepare()
+    fun currentOpenClPreparation(): OpenClRuntime.Preparation = ensureOpenClStartup()
 
     fun currentOpenClProbe(): OpenClRuntime.ProbeResult? = OpenClRuntime.lastProbe()
 
@@ -88,7 +98,7 @@ class NativeFfmpegEngine : ExecutionEngine {
      * the exact FFmpegKit/OpenCL runtime path could not create an OpenCL device.
      */
     fun probeOpenClAsync(onComplete: (OpenClRuntime.ProbeResult) -> Unit) {
-        OpenClRuntime.prepare()
+        ensureOpenClStartup()
 
         val probeCommand =
             "-hide_banner -nostdin -loglevel error " +
@@ -137,6 +147,11 @@ class NativeFfmpegEngine : ExecutionEngine {
         onStatistics: (RenderProgress) -> Unit,
         onComplete: (success: Boolean, returnCode: Int?, outputPath: String?, error: String?) -> Unit
     ): EngineSession {
+        // Configure OpenCL immediately before the actual FFmpegKit execution.
+        // This guarantees the native engine, not the UI layer, owns the runtime
+        // bootstrap contract.
+        ensureOpenClStartup()
+
         // Strip leading "ffmpeg " if present
         val cleanCommand = if (command.trimStart().startsWith("ffmpeg ", ignoreCase = true)) {
             command.trimStart().substring(7).trim()
