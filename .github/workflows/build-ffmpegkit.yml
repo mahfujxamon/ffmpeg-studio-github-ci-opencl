@@ -1287,7 +1287,79 @@ jobs:
 
 
       # ============================================================
-      # 27. Upload AAR
+      # 27. Verify final APK ZIP/container integrity
+      #
+      # An Android APK is a ZIP container. A successful Gradle build
+      # is not enough if the APK is corrupted after packaging or
+      # during artifact handling. Verify the exact bytes BEFORE
+      # uploading them.
+      # ============================================================
+      - name: Verify final APK integrity and signing
+        run: |
+          set -euxo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+
+          echo "========================================"
+          echo "APK FILE"
+          echo "========================================"
+          ls -lh "$APK"
+          file "$APK"
+
+          echo
+          echo "========================================"
+          echo "APK ZIP TEST"
+          echo "========================================"
+          unzip -t "$APK"
+
+          echo
+          echo "========================================"
+          echo "APK ZIP LIST TEST"
+          echo "========================================"
+          unzip -Z1 "$APK" >/tmp/apk-file-list.txt
+          test -s /tmp/apk-file-list.txt
+          wc -l /tmp/apk-file-list.txt
+
+          echo
+          echo "========================================"
+          echo "ZIP ALIGNMENT"
+          echo "========================================"
+          "${ANDROID_SDK_ROOT}/build-tools/35.0.0/zipalign" \
+            -c \
+            -P 16 \
+            -v 4 \
+            "$APK"
+
+          echo
+          echo "========================================"
+          echo "APK SIGNATURE"
+          echo "========================================"
+          "${ANDROID_SDK_ROOT}/build-tools/35.0.0/apksigner" \
+            verify \
+            --verbose \
+            "$APK"
+
+          echo
+          echo "========================================"
+          echo "SHA256"
+          echo "========================================"
+          sha256sum "$APK" | tee app-debug.apk.sha256
+
+          mkdir -p dist
+          cp "$APK" dist/ffmpeg-studio-debug.apk
+          cp app-debug.apk.sha256 dist/ffmpeg-studio-debug.apk.sha256
+
+          # Verify the COPIED artifact bytes again.
+          sha256sum -c dist/ffmpeg-studio-debug.apk.sha256
+          unzip -t dist/ffmpeg-studio-debug.apk
+
+          echo
+          echo "APK integrity: PASS"
+
+
+      # ============================================================
+      # 28. Upload AAR
       # ============================================================
       - name: Upload custom AAR
         uses: actions/upload-artifact@v4
@@ -1298,18 +1370,26 @@ jobs:
 
 
       # ============================================================
-      # 28. Upload APK
+      # 29. Upload APK
+      #
+      # Upload the exact verified copy, not a wildcard.
+      # compression-level 0 avoids an unnecessary second compression
+      # layer around the already-compressed APK during artifact
+      # creation.
       # ============================================================
-      - name: Upload debug APK
+      - name: Upload verified debug APK
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-studio-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: |
+            dist/ffmpeg-studio-debug.apk
+            dist/ffmpeg-studio-debug.apk.sha256
           if-no-files-found: error
+          compression-level: 0
 
 
       # ============================================================
-      # 29. Upload FFmpegKit build logs
+      # 30. Upload FFmpegKit build logs
       # ============================================================
       - name: Upload FFmpegKit build logs
         if: always()
