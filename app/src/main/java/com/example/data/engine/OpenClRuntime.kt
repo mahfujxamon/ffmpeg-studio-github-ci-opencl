@@ -34,53 +34,42 @@ object OpenClRuntime {
             "/vendor/lib64/libOpenCL.so",
             "/system/vendor/lib64/libOpenCL.so",
             "/system/lib64/libOpenCL.so",
-            "/vendor/lib64/egl/libGLES_mali.so",
-            "/system/vendor/lib64/egl/libGLES_mali.so"
+            "/vendor/lib64/egl/libGLES_mali.so",       // For MediaTek/Exynos
+            "/system/vendor/lib64/egl/libGLES_mali.so",
+            "/system/vendor/lib64/libOpenCL-pixel.so"  // For some custom ROMs/Pixels
         )
 
-        var activeDriverPath: String? = null
+        var goldenDriverPath: String? = null
 
-        // 1. Find the REAL driver that actually exists on this device
+        // 1. The Magic RAM Pre-load Hack: Test and force-load into App Memory
         for (path in commonPaths) {
             if (File(path).exists()) {
-                activeDriverPath = path
-                break
+                try {
+                    // Try to forcefully load the library into the app's process via JVM
+                    System.load(path)
+                    
+                    // If we reach here without crashing, the OS Linker allowed it!
+                    goldenDriverPath = path
+                    break
+                } catch (e: UnsatisfiedLinkError) {
+                    // Linker blocked it or wrong architecture, ignore and try next
+                } catch (e: Exception) {
+                    // Other reading errors, ignore and try next
+                }
             }
         }
 
-        if (activeDriverPath != null) {
+        if (goldenDriverPath != null) {
             try {
-                // 2. Create a fake libOpenCL.so using a Symlink in a safe app directory
-                val appFilesDir = File("/data/user/0/com.aistudio.ffmpegstudio.kxvq/files")
-                val oclDir = File(appFilesDir, "ocl_driver")
-                if (!oclDir.exists()) {
-                    oclDir.mkdirs()
-                }
-
-                // Delete any old symlink to avoid stale references
-                val symlinkDriver = File(oclDir, "libOpenCL.so")
-                if (symlinkDriver.exists()) {
-                    symlinkDriver.delete()
-                }
-
-                // Attempt to create the symlink to the real driver
-                try {
-                    Os.symlink(activeDriverPath, symlinkDriver.absolutePath)
-                } catch (e: Exception) {
-                    // Ignore symlink failure (Android 10+ might block this based on SELinux)
-                }
-
-                // 3. Fallback: If symlink exists, use it. Otherwise, use the direct absolute path
-                val loadPath = if (symlinkDriver.exists()) symlinkDriver.absolutePath else activeDriverPath
-
-                // 4. Force Khronos to bypass default .icd discovery and load our exact file
-                Os.setenv("OCL_ICD_FILENAMES", loadPath, true)
+                // 2. Now that the driver is officially in our app's RAM,
+                // tell Khronos loader exactly which file to ask for.
+                Os.setenv("OCL_ICD_FILENAMES", goldenDriverPath, true)
                 Os.setenv("OCL_ICD_ENABLE_TRACE", "1", true) // For debugging in logcat
 
                 val result = Preparation(
                     configured = true,
-                    icdLibraries = listOf(loadPath),
-                    message = "Successfully mapped OpenCL via symlink/direct path: $loadPath"
+                    icdLibraries = listOf(goldenDriverPath),
+                    message = "Successfully pre-loaded and mapped OpenCL driver: $goldenDriverPath"
                 )
                 preparationCache = result
                 return result
@@ -88,19 +77,19 @@ object OpenClRuntime {
             } catch (e: Exception) {
                 val result = Preparation(
                     configured = false,
-                    icdLibraries = listOf(activeDriverPath),
-                    message = "Failed to configure OpenCL driver at $activeDriverPath: ${e.message}"
+                    icdLibraries = listOf(goldenDriverPath),
+                    message = "Pre-loaded $goldenDriverPath but env setup failed: ${e.message}"
                 )
                 preparationCache = result
                 return result
             }
         }
 
-        // If no driver exists on the device at all
+        // If OS blocked every single file or none exist
         val result = Preparation(
             configured = false,
             icdLibraries = emptyList(),
-            message = "No native OpenCL driver found on this device."
+            message = "No valid, accessible native OpenCL driver found on this device."
         )
         preparationCache = result
         return result
