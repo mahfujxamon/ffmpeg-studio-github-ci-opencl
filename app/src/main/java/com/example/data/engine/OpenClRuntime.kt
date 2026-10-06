@@ -116,17 +116,23 @@ object OpenClRuntime {
             return result
         }
 
-        // Do NOT put guessed vendor library names into OCL_ICD_FILENAMES.
-        // The Khronos loader expects actual ICD libraries there, not merely
-        // Android GPU libraries that happen to export OpenCL entry points.
-        // Instead, a separate MNN-style native probe directly dlopens the
-        // device libraries and checks clGetPlatformIDs.
+        // No .icd file exists. We have a native MNN-style probe that can
+        // identify a real device OpenCL provider. If it finds one, configure
+        // the Khronos loader with that exact absolute library path. This is
+        // not a guessed vendor name and no vendor binary is bundled.
+        val nativeLoaderConfig = OpenClNativeProbe.configureKhronosLoader()
+        val configured = nativeLoaderConfig.startsWith("configured Khronos loader")
+        val configuredPath = if (configured) {
+            nativeLoaderConfig.substringAfter("OCL_ICD_FILENAMES=").trim()
+        } else {
+            ""
+        }
         val result = Preparation(
-            configured = false,
-            icdLibraries = emptyList(),
+            configured = configured,
+            icdLibraries = if (configuredPath.isNotEmpty()) listOf(configuredPath) else emptyList(),
             searchedDirectories = searched,
             libraryCandidates = vendorCandidates,
-            message = "No .icd registration found; using direct native OpenCL vendor-library probe instead of guessing OCL_ICD_FILENAMES."
+            message = "No .icd registration found; $nativeLoaderConfig"
         )
         preparationCache = result
         return result
