@@ -39,3 +39,11 @@ output file path. The UI previously treated `success=true` + `returnCode=0` +
 `outputPath=null` as an execution failure. v10 reports that case as a successful
 FFmpeg test instead of adding a false `[ERROR]` line. Normal file renders still
 validate the output file and publish it to MediaStore.
+
+## v10-4 app-side hardening
+
+The native Android engine now treats the OpenCL device binding as part of command normalization, not as a responsibility of each UI command template. Any command using an OpenCL-capable filter receives:
+
+`-init_hw_device opencl=ocl:0.0 -filter_hw_device ocl`
+
+when those options are missing. The same normalization is applied defensively immediately before `FFmpegKit.executeAsync()`. Existing OpenCL options are preserved without duplication, and ordinary filenames containing `opencl` are not considered OpenCL requests.

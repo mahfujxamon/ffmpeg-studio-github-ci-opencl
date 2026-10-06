@@ -28,7 +28,14 @@ This build links the official Khronos OpenCL ICD Loader. At app startup, the run
 
 The app performs a small FFmpeg-backed OpenCL initialization probe and reports whether an OpenCL device could actually be initialized. A successful FFmpeg build alone is not treated as proof of GPU execution.
 
+OpenCL commands are normalized at the native-engine boundary. When a command contains an OpenCL-capable filter such as `unsharp_opencl`, the engine automatically adds the required global options `-init_hw_device opencl=ocl:0.0` and `-filter_hw_device ocl` unless they are already present. This prevents the `hwupload` "A hardware device reference is required" failure when a user enters only the filtergraph. Existing options are preserved and never duplicated.
+
 Note: OpenCL is not an automatic replacement for every CPU filter. Commands must request an OpenCL-capable filter/hardware path to use GPU processing. When the command does not request OpenCL, the existing CPU filter path remains unchanged.
+
+
+### v10-4 runtime hardening
+
+The native engine now applies the OpenCL device options both during command preparation and defensively again immediately before FFmpegKit execution. OpenCL detection also ignores ordinary filenames containing the word `opencl`, so those paths do not accidentally switch a render into GPU mode.
 
 
 ### v10 status cleanup

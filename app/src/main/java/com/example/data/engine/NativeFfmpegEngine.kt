@@ -99,15 +99,33 @@ class NativeFfmpegEngine : ExecutionEngine {
     fun currentOpenClProbe(): OpenClRuntime.ProbeResult? = OpenClRuntime.lastProbe()
 
     fun isOpenClRequested(command: String): Boolean {
-        val normalized = command.lowercase()
-        return normalized.contains("opencl") || normalized.contains("_opencl")
+        val normalized = normalizeCommandSeparators(command)
+
+        // Do not treat an arbitrary filename/path containing `opencl` as a GPU
+        // request. Detect the actual FFmpeg OpenCL device options or filter names
+        // such as `unsharp_opencl`, `nlmeans_opencl`, and `tonemap_opencl`.
+        val hasOpenClDeviceOption = Regex(
+            "(?:^|\\s)-(?:init_hw_device\\s+opencl\\s*=|filter_hw_device\\s+ocl(?:\\s|$))",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(normalized)
+        val hasOpenClFilter = Regex(
+            "(?:^|[,\\s\\[])\\w+_opencl(?:[=:,\\]\\s;]|$)",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(normalized)
+        val hasOpenClSource = Regex(
+            "(?:^|[,\\s])opencl(?:src)?(?:[=:,\\]\\s;]|$)",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(normalized)
+
+        return hasOpenClDeviceOption || hasOpenClFilter || hasOpenClSource
     }
 
     /**
      * Converts a user command into a command that is safe for the capabilities
-     * actually confirmed on this device. OpenCL and MediaCodec are both
-     * opportunistic: an unavailable accelerator must never make a render fail
-     * when a CPU/software equivalent is available.
+     * actually confirmed on this device. OpenCL is a real GPU path: when the
+     * user requests an OpenCL filter, the command is automatically decorated
+     * with an explicit FFmpeg OpenCL hardware device and filter-device binding.
+     * MediaCodec encoder fallback remains opportunistic.
      */
     fun prepareCommandForRuntime(command: String): RuntimeCommandPlan {
         // FFmpegKit's String command parser is space-token based; command-editor/UI
@@ -120,20 +138,29 @@ class NativeFfmpegEngine : ExecutionEngine {
         var openClFallback = false
 
         if (openClRequested) {
+            // A raw command such as `-vf hwupload,unsharp_opencl=...` used to
+            // reach FFmpeg without an AVHWDeviceRef, causing `hwupload` to fail.
+            // Make the explicit device propagation deterministic at the app
+            // boundary, while preserving any already-specified OpenCL options.
+            val decorated = ensureOpenClHardwareDeviceOptions(effective)
+            if (decorated != effective) {
+                effective = decorated
+                notes += "OpenCL request detected; added explicit opencl=ocl:0.0 initialization and filter device binding."
+            }
+
             val probe = OpenClRuntime.lastProbe()
             when {
                 probe?.available == true -> {
-                    notes += "OpenCL capability probe succeeded; keeping the OpenCL GPU command unchanged."
+                    notes += "OpenCL capability probe succeeded; executing the GPU filter path without CPU substitution."
                 }
                 probe != null -> {
                     // Main product goal is real OpenCL execution. Do not silently
                     // rewrite an explicitly requested OpenCL command to CPU. Keep
-                    // the original command so the runtime failure is visible and
-                    // measurable while the ICD/device integration is being fixed.
-                    notes += "OpenCL was requested but the current probe failed; preserving the OpenCL command for real-runtime testing (no CPU substitution)."
+                    // the command intact so runtime failures remain visible.
+                    notes += "OpenCL was requested but the current probe failed; preserving the OpenCL command for direct GPU-path testing (no CPU substitution)."
                 }
                 else -> {
-                    notes += "OpenCL was requested but no completed probe result is available; preserving the OpenCL command for direct runtime testing."
+                    notes += "OpenCL was requested but no completed probe result is available; preserving the OpenCL command for direct GPU-path testing."
                 }
             }
         }
@@ -185,6 +212,48 @@ class NativeFfmpegEngine : ExecutionEngine {
             .replace('\n', ' ')
             .replace('\t', ' ')
             .trim()
+
+    /**
+     * Ensures every OpenCL command has the two FFmpeg global options required
+     * for `hwupload`/OpenCL filters to resolve an AVHWDeviceRef:
+     *
+     *   -init_hw_device opencl=ocl:0.0
+     *   -filter_hw_device ocl
+     *
+     * Existing options are preserved and never duplicated. The options are
+     * prepended so they are unquestionably parsed as global FFmpeg options.
+     */
+    private fun ensureOpenClHardwareDeviceOptions(command: String): String {
+        var effective = normalizeCommandSeparators(command)
+
+        val hasOpenClInit = Regex(
+            "(?:^|\\s)-init_hw_device\\s+opencl\\s*=\\s*ocl(?::\\d+(?:\\.\\d+)?)?(?:\\s|$)",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(effective)
+
+        val hasOpenClFilterDevice = Regex(
+            "(?:^|\\s)-filter_hw_device\\s+ocl(?:\\s|$)",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(effective)
+
+        val missing = buildList {
+            if (!hasOpenClInit) add("-init_hw_device opencl=ocl:0.0")
+            if (!hasOpenClFilterDevice) add("-filter_hw_device ocl")
+        }
+
+        if (missing.isEmpty()) return effective
+
+        val prefix = missing.joinToString(" ")
+        val hasFfmpegExecutable = effective.equals("ffmpeg", ignoreCase = true) ||
+                effective.startsWith("ffmpeg ", ignoreCase = true)
+
+        return if (hasFfmpegExecutable) {
+            val args = effective.substring(6).trimStart()
+            "ffmpeg $prefix $args".trim()
+        } else {
+            "$prefix $effective".trim()
+        }
+    }
 
     /**
      * Uses the actual FFmpeg binary to initialize an OpenCL hardware device.
@@ -253,19 +322,25 @@ class NativeFfmpegEngine : ExecutionEngine {
         onStatistics: (RenderProgress) -> Unit,
         onComplete: (success: Boolean, returnCode: Int?, outputPath: String?, error: String?) -> Unit
     ): EngineSession {
-        // Runtime bootstrap is owned by this engine. The caller should pass the
-        // command returned by prepareCommandForRuntime(). Explicit OpenCL commands
-        // are intentionally preserved for real GPU-path validation.
+        // Runtime bootstrap is owned by this engine. The caller normally passes
+        // the command returned by prepareCommandForRuntime(), but execution is
+        // defensive too: an OpenCL command can never reach FFmpeg without the
+        // required device options.
         ensureOpenClStartup()
 
-        // Strip leading "ffmpeg " if present
-        val cleanCommand = normalizeCommandSeparators(
+        val strippedCommand = normalizeCommandSeparators(
             if (command.trimStart().startsWith("ffmpeg ", ignoreCase = true)) {
                 command.trimStart().substring(7).trim()
             } else {
                 command.trim()
             }
         )
+
+        val cleanCommand = if (isOpenClRequested(strippedCommand)) {
+            ensureOpenClHardwareDeviceOptions(strippedCommand)
+        } else {
+            strippedCommand
+        }
 
         val expectedOutputPath = extractOutputPath(cleanCommand)
 

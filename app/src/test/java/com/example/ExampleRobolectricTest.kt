@@ -68,7 +68,50 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `test 5 render progress formatting displays real metrics correctly`() {
+    fun `test 5 opencl commands automatically receive explicit hardware device options`() {
+        val nativeEngine = NativeFfmpegEngine()
+        val plan = nativeEngine.prepareCommandForRuntime(
+            "ffmpeg -i {input} -vf \"hwupload,unsharp_opencl=lx=5:ly=5:la=1.5,hwdownload,format=yuv420p\" -c:v libx264 {output}"
+        )
+
+        assertTrue(plan.openClRequested)
+        assertTrue(plan.openClUsed)
+        assertTrue(plan.command.startsWith("ffmpeg -init_hw_device opencl=ocl:0.0 -filter_hw_device ocl "))
+        assertEquals(1, Regex("-init_hw_device\\s+opencl=ocl:0\\.0").findAll(plan.command).count())
+        assertEquals(1, Regex("-filter_hw_device\\s+ocl").findAll(plan.command).count())
+    }
+
+    @Test
+    fun `test 6 opencl device options are not duplicated when already present`() {
+        val nativeEngine = NativeFfmpegEngine()
+        val command =
+            "ffmpeg -init_hw_device opencl=ocl:0.0 -filter_hw_device ocl -i in.mp4 -vf \"hwupload,unsharp_opencl\" -c:v libx264 out.mp4"
+        val plan = nativeEngine.prepareCommandForRuntime(command)
+
+        assertEquals(command, plan.command)
+        assertTrue(plan.openClRequested)
+        assertTrue(plan.openClUsed)
+    }
+
+    @Test
+    fun `test 7 plain commands do not become opencl commands because a filename contains opencl`() {
+        val nativeEngine = NativeFfmpegEngine()
+        val command = "ffmpeg -i /tmp/opencl_demo.mp4 -vf scale=1280:720 -c:v libx264 out.mp4"
+        val plan = nativeEngine.prepareCommandForRuntime(command)
+
+        assertTrue(!plan.openClRequested)
+        assertEquals(command, plan.command)
+    }
+
+    @Test
+    fun `test 8 opencl command is defensively recognized when execute receives it without device options`() {
+        val nativeEngine = NativeFfmpegEngine()
+        val command = "-f lavfi -i color=c=black:s=16x16:r=1 -vf \"hwupload,unsharp_opencl,hwdownload\" -frames:v 1 -f null -"
+        assertTrue(nativeEngine.isOpenClRequested(command))
+    }
+
+    @Test
+    fun `test 9 render progress formatting displays real metrics correctly`() {
         val progress = RenderProgress(
             frame = 1821,
             fps = 29.8f,
@@ -87,7 +130,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `test 6 session cancellation responds cleanly`() {
+    fun `test 10 session cancellation responds cleanly`() {
         val nativeEngine = NativeFfmpegEngine()
         var completedCalled = false
 
@@ -105,14 +148,14 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `test 7 checkNativeRuntime never crashes and returns structured status`() {
+    fun `test 11 checkNativeRuntime never crashes and returns structured status`() {
         val nativeEngine = NativeFfmpegEngine()
         val status = nativeEngine.checkNativeRuntime()
         assertNotNull(status)
     }
 
     @Test
-    fun `test 8 media publisher validates source file existence`() = runBlocking {
+    fun `test 12 media publisher validates source file existence`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val publisher = com.example.data.media.MediaPublisher(context)
         val nonExistentFile = File("/tmp/nonexistent_test.mp4")
@@ -122,7 +165,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `test 9 asset resolver detects missing asset cleanly`() {
+    fun `test 13 asset resolver detects missing asset cleanly`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val assetResolver = com.example.data.media.AssetResolver(context)
         val cmd = "ffmpeg -i in.mp4 -filter_complex \"movie=missing_watermark.png [wm]; [0:v][wm] overlay\" out.mp4"
@@ -134,7 +177,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `test 10 asset resolver inserts optimal filter threading without modifying user options`() {
+    fun `test 14 asset resolver inserts optimal filter threading without modifying user options`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val assetResolver = com.example.data.media.AssetResolver(context)
 

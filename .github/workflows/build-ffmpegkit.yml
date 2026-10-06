@@ -1294,6 +1294,24 @@ jobs:
 
 
       # ============================================================
+      # App-side OpenCL command hardening guard
+      # ============================================================
+      - name: Verify app-side OpenCL command normalization
+        run: |
+          set -euxo pipefail
+
+          ENGINE=app/src/main/java/com/example/data/engine/NativeFfmpegEngine.kt
+          TESTS=app/src/test/java/com/example/ExampleRobolectricTest.kt
+
+          test -f "$ENGINE"
+          test -f "$TESTS"
+          grep -F 'ensureOpenClHardwareDeviceOptions' "$ENGINE"
+          grep -F -- '-init_hw_device opencl=ocl:0.0' "$ENGINE"
+          grep -F -- '-filter_hw_device ocl' "$ENGINE"
+          grep -F 'opencl commands automatically receive explicit hardware device options' "$TESTS"
+
+
+      # ============================================================
       # 25. Build Android application against custom AAR
       # ============================================================
       - name: Build Android app against custom AAR
@@ -1304,6 +1322,15 @@ jobs:
             --no-daemon \
             --stacktrace \
             assembleDebug
+
+      - name: Run app unit tests
+        run: |
+          set -eux
+
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            :app:testDebugUnitTest
 
 
       # ============================================================
