@@ -69,12 +69,7 @@ class NativeFfmpegEngine : ExecutionEngine {
                 openClConfigured = openClPreparation.configured,
                 openClIcdLibraries = openClPreparation.icdLibraries,
                 openClProbeAvailable = OpenClRuntime.lastProbe()?.available,
-                openClProbeDetail = buildString {
-                    OpenClRuntime.lastProbe()?.detail?.let { append(it) }
-                    if (isNotEmpty()) append(" ")
-                    append("DirectNativeProbe=")
-                    append(OpenClRuntime.directNativeProbe().takeLast(6000))
-                }
+                openClProbeDetail = OpenClRuntime.lastProbe()?.detail
             )
         } catch (t: Throwable) {
             val causeChain = buildDetailedErrorChain(t)
@@ -115,7 +110,10 @@ class NativeFfmpegEngine : ExecutionEngine {
      * when a CPU/software equivalent is available.
      */
     fun prepareCommandForRuntime(command: String): RuntimeCommandPlan {
-        var effective = command.trim()
+        // FFmpegKit's String command parser is space-token based; command-editor/UI
+        // input can contain literal newlines between arguments. Normalize only
+        // line-break/tab separators so `opencl=ocl\n-i` never becomes one token.
+        var effective = normalizeCommandSeparators(command)
         val notes = mutableListOf<String>()
 
         val openClRequested = isOpenClRequested(effective)
@@ -182,6 +180,12 @@ class NativeFfmpegEngine : ExecutionEngine {
     private fun normalizeCommandWhitespace(command: String): String =
         command.replace(Regex("\\s{2,}"), " ").trim()
 
+    private fun normalizeCommandSeparators(command: String): String =
+        command.replace('\r', ' ')
+            .replace('\n', ' ')
+            .replace('\t', ' ')
+            .trim()
+
     /**
      * Uses the actual FFmpeg binary to initialize an OpenCL hardware device.
      * This is stronger than merely checking for a library file: failure means
@@ -190,7 +194,6 @@ class NativeFfmpegEngine : ExecutionEngine {
     fun probeOpenClAsync(onComplete: (OpenClRuntime.ProbeResult) -> Unit) {
         val preparation = ensureOpenClStartup()
         OpenClRuntime.clearProbe()
-        val directProbe = OpenClRuntime.directNativeProbe()
 
         val probeCommand =
             "-hide_banner -nostdin -loglevel error " +
@@ -217,8 +220,6 @@ class NativeFfmpegEngine : ExecutionEngine {
 
                 val preparationDetail = buildString {
                     append(preparation.message)
-                    append(" DirectNativeProbe=")
-                    append(directProbe.takeLast(6000))
                     if (preparation.icdLibraries.isNotEmpty()) {
                         append(" ICDs=")
                         append(preparation.icdLibraries.joinToString())
@@ -236,7 +237,7 @@ class NativeFfmpegEngine : ExecutionEngine {
         } catch (t: Throwable) {
             val result = OpenClRuntime.ProbeResult(
                 available = false,
-                detail = "${preparation.message} DirectNativeProbe=${directProbe.takeLast(6000)} Probe exception=${buildDetailedErrorChain(t)}"
+                detail = "${preparation.message} Probe exception=${buildDetailedErrorChain(t)}"
             )
             OpenClRuntime.setProbeResult(result)
             onComplete(result)
@@ -256,11 +257,13 @@ class NativeFfmpegEngine : ExecutionEngine {
         ensureOpenClStartup()
 
         // Strip leading "ffmpeg " if present
-        val cleanCommand = if (command.trimStart().startsWith("ffmpeg ", ignoreCase = true)) {
-            command.trimStart().substring(7).trim()
-        } else {
-            command.trim()
-        }
+        val cleanCommand = normalizeCommandSeparators(
+            if (command.trimStart().startsWith("ffmpeg ", ignoreCase = true)) {
+                command.trimStart().substring(7).trim()
+            } else {
+                command.trim()
+            }
+        )
 
         val expectedOutputPath = extractOutputPath(cleanCommand)
 

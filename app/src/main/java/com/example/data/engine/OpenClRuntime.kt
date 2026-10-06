@@ -116,31 +116,34 @@ object OpenClRuntime {
             return result
         }
 
-        // No .icd file exists. We have a native MNN-style probe that can
-        // identify a real device OpenCL provider. If it finds one, configure
-        // the Khronos loader with that exact absolute library path. This is
-        // not a guessed vendor name and no vendor binary is bundled.
-        val nativeLoaderConfig = OpenClNativeProbe.configureKhronosLoader()
-        val configured = nativeLoaderConfig.startsWith("configured Khronos loader")
-        val configuredPath = if (configured) {
-            nativeLoaderConfig.substringAfter("OCL_ICD_FILENAMES=").trim()
-        } else {
-            ""
-        }
+        // Important Android-specific step:
+        // If no .icd file is present, many shipped Android GPU runtimes are
+        // exposed directly as shared libraries such as libGLES_mali.so.
+        // Real apps commonly load these by name. We give the Khronos loader the
+        // same vendor-library candidates through OCL_ICD_FILENAMES. Invalid or
+        // non-ICD candidates are ignored by the loader; a valid cl_khr_icd
+        // implementation can then be enumerated.
+        val configured = setEnvironment(
+            OCL_ICD_FILENAMES,
+            vendorCandidates.joinToString(File.pathSeparator)
+        )
+
         val result = Preparation(
             configured = configured,
-            icdLibraries = if (configuredPath.isNotEmpty()) listOf(configuredPath) else emptyList(),
+            icdLibraries = vendorCandidates,
             searchedDirectories = searched,
             libraryCandidates = vendorCandidates,
-            message = "No .icd registration found; $nativeLoaderConfig"
+            message = if (configured) {
+                "No .icd registration found; configured runtime vendor-library candidates for Khronos loader discovery."
+            } else {
+                "No .icd registration found and runtime vendor-library environment setup failed."
+            }
         )
         preparationCache = result
         return result
     }
 
     fun lastProbe(): ProbeResult? = probeCache
-
-    fun directNativeProbe(): String = OpenClNativeProbe.probe()
 
     fun setProbeResult(result: ProbeResult) {
         probeCache = result
