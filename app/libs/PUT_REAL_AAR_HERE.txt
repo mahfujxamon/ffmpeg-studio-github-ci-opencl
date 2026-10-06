@@ -1,0 +1,4 @@
+REPLACE THIS SLOT
+
+Replace app/libs/ffmpeg-kit-custom.aar with the real custom FFmpegKit AAR.
+Keep the filename exactly: ffmpeg-kit-custom.aar

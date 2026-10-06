@@ -79,12 +79,17 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 // This makes it easy to add them back in the future if needed.
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
-  // Real Native FFmpegKit Full GPL with MediaCodec and full filterset (including boxblur)
-  if (file("libs/ffmpeg-kit.aar").exists()) {
-    implementation(files("libs/ffmpeg-kit.aar"))
-  } else {
-    implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full-gpl:8.1.9")
+  // Local custom FFmpegKit AAR.
+  // Replace app/libs/ffmpeg-kit-custom.aar with the AAR produced by the
+  // custom OpenCL + MediaCodec FFmpegKit build before running Gradle.
+  val customFfmpegAar = file("libs/ffmpeg-kit-custom.aar")
+  if (!customFfmpegAar.exists()) {
+    throw GradleException(
+      "Missing local FFmpegKit AAR: ${customFfmpegAar}. Replace the placeholder " +
+        "with the real custom ffmpeg-kit-custom.aar before building."
+    )
   }
+  implementation(files(customFfmpegAar))
 
   // Local AARs do not carry the Maven POM, so this transitive runtime dependency
   // must be declared explicitly. FFmpegKit 8.1.9 uses it from FFmpegKitConfig

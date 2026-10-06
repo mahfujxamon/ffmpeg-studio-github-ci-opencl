@@ -35,3 +35,7 @@ Note: OpenCL is not an automatic replacement for every CPU filter. Commands must
 The execution engine probes the OpenCL device before a render that requests OpenCL. If the probe reports no usable OpenCL platform, commands using supported OpenCL filter equivalents are converted to the CPU filter path (for example `unsharp_opencl` -> `unsharp`, and the OpenCL hardware upload/download wrappers are removed). The MediaCodec encoder request is preserved when a compatible hardware encoder exists. When no compatible hardware H.264/HEVC MediaCodec encoder exists, the engine falls back to `libx264`/`libx265`.
 
 This fallback does not pretend that OpenCL is working: the terminal log records the original command, the effective command, the probe result, and the fallback reason.
+
+## Fast local-AAR workflow
+
+Use `app/libs/ffmpeg-kit-custom.aar` as the single custom FFmpegKit input. Replace the placeholder with the real OpenCL + MediaCodec AAR before building. The GitHub Actions workflow is app-only and does not rebuild FFmpegKit.
