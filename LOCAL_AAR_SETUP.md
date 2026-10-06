@@ -1,25 +1,29 @@
-# Local custom FFmpegKit AAR setup
+# Local custom FFmpegKit AAR — exploded layout
 
-The app now uses **only** the local file:
+Do **not** upload the `.aar` file for the normal workflow.
 
-`app/libs/ffmpeg-kit-custom.aar`
+Instead, unzip your real `ffmpeg-kit-custom.aar` and copy **all of its contents** into:
 
-The ZIP contains a tiny placeholder AAR so the slot/path already exists.
+`app/ffmpeg-kit-custom/`
 
-## Before building
+The directory must have `AndroidManifest.xml` and `classes.jar` at its top level. If the AAR contains `jni/`, `res/`, `assets/`, `libs/`, etc., keep those directories exactly as they appear after unzipping.
 
-Replace:
+Example:
 
-`app/libs/ffmpeg-kit-custom.aar`
+```text
+app/
+└── ffmpeg-kit-custom/
+    ├── AndroidManifest.xml
+    ├── classes.jar
+    ├── R.txt
+    ├── proguard.txt
+    ├── jni/
+    │   └── arm64-v8a/
+    │       └── *.so
+    ├── res/
+    └── assets/
+```
 
-with the real custom FFmpegKit AAR produced by the OpenCL + MediaCodec build.
+The GitHub Actions workflow automatically recreates `app/libs/ffmpeg-kit-custom.aar` from this directory before Gradle runs.
 
-Keep the filename exactly:
-
-`ffmpeg-kit-custom.aar`
-
-After replacement, run the normal Android/AI Studio Gradle build. GitHub Actions also builds the app directly from this local AAR and does **not** rebuild FFmpegKit.
-
-## Important
-
-The placeholder AAR is intentionally not a usable FFmpegKit implementation. It only reserves the correct filename and location. A real custom FFmpegKit AAR must replace it before `assembleDebug`.
+This avoids relying on GitHub Actions being able to inspect or preserve a binary AAR upload as expected.

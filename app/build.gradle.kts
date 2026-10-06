@@ -58,6 +58,12 @@ android {
     compose = true
     buildConfig = true
   }
+  externalNativeBuild {
+    cmake {
+      path = file("src/main/cpp/CMakeLists.txt")
+      version = "3.22.1"
+    }
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
@@ -80,8 +86,8 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
   // Local custom FFmpegKit AAR.
-  // Replace app/libs/ffmpeg-kit-custom.aar with the AAR produced by the
-  // custom OpenCL + MediaCodec FFmpegKit build before running Gradle.
+  // CI creates app/libs/ffmpeg-kit-custom.aar from the exploded AAR directory
+  // app/ffmpeg-kit-custom/ before Gradle runs.
   val customFfmpegAar = file("libs/ffmpeg-kit-custom.aar")
   if (!customFfmpegAar.exists()) {
     throw GradleException(

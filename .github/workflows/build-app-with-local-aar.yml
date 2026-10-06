@@ -42,13 +42,32 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;${ANDROID_NDK_VERSION}"
 
-      - name: Verify local custom FFmpegKit AAR
+      - name: Package exploded custom FFmpegKit AAR
         run: |
           set -eux
-          test -s app/libs/ffmpeg-kit-custom.aar
-          unzip -t app/libs/ffmpeg-kit-custom.aar
+          AAR_DIR="app/ffmpeg-kit-custom"
+          AAR_OUT="app/libs/ffmpeg-kit-custom.aar"
+
+          test -d "$AAR_DIR"
+          rm -f "$AAR_OUT"
+
+          # The repository stores the AAR EXPLODED. Re-create the AAR archive
+          # with its contents at the archive root (not nested under a folder).
+          test -f "$AAR_DIR/AndroidManifest.xml"
+          test -f "$AAR_DIR/classes.jar"
+
+          mkdir -p app/libs
+          (
+            cd "$AAR_DIR"
+            zip -qr "../libs/ffmpeg-kit-custom.aar" . \
+              -x 'PUT_UNZIPPED_AAR_CONTENTS_HERE.txt'
+          )
+
+          echo "=== Generated AAR ==="
+          ls -lh "$AAR_OUT"
+          unzip -t "$AAR_OUT"
           echo "=== AAR contents ==="
-          unzip -l app/libs/ffmpeg-kit-custom.aar
+          unzip -l "$AAR_OUT"
 
       - name: Build debug APK
         run: |

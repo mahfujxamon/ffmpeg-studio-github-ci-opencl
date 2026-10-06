@@ -116,34 +116,25 @@ object OpenClRuntime {
             return result
         }
 
-        // Important Android-specific step:
-        // If no .icd file is present, many shipped Android GPU runtimes are
-        // exposed directly as shared libraries such as libGLES_mali.so.
-        // Real apps commonly load these by name. We give the Khronos loader the
-        // same vendor-library candidates through OCL_ICD_FILENAMES. Invalid or
-        // non-ICD candidates are ignored by the loader; a valid cl_khr_icd
-        // implementation can then be enumerated.
-        val configured = setEnvironment(
-            OCL_ICD_FILENAMES,
-            vendorCandidates.joinToString(File.pathSeparator)
-        )
-
+        // Do NOT put guessed vendor library names into OCL_ICD_FILENAMES.
+        // The Khronos loader expects actual ICD libraries there, not merely
+        // Android GPU libraries that happen to export OpenCL entry points.
+        // Instead, a separate MNN-style native probe directly dlopens the
+        // device libraries and checks clGetPlatformIDs.
         val result = Preparation(
-            configured = configured,
-            icdLibraries = vendorCandidates,
+            configured = false,
+            icdLibraries = emptyList(),
             searchedDirectories = searched,
             libraryCandidates = vendorCandidates,
-            message = if (configured) {
-                "No .icd registration found; configured runtime vendor-library candidates for Khronos loader discovery."
-            } else {
-                "No .icd registration found and runtime vendor-library environment setup failed."
-            }
+            message = "No .icd registration found; using direct native OpenCL vendor-library probe instead of guessing OCL_ICD_FILENAMES."
         )
         preparationCache = result
         return result
     }
 
     fun lastProbe(): ProbeResult? = probeCache
+
+    fun directNativeProbe(): String = OpenClNativeProbe.probe()
 
     fun setProbeResult(result: ProbeResult) {
         probeCache = result

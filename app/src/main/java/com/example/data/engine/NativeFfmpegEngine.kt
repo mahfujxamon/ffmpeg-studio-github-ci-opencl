@@ -69,7 +69,12 @@ class NativeFfmpegEngine : ExecutionEngine {
                 openClConfigured = openClPreparation.configured,
                 openClIcdLibraries = openClPreparation.icdLibraries,
                 openClProbeAvailable = OpenClRuntime.lastProbe()?.available,
-                openClProbeDetail = OpenClRuntime.lastProbe()?.detail
+                openClProbeDetail = buildString {
+                    OpenClRuntime.lastProbe()?.detail?.let { append(it) }
+                    if (isNotEmpty()) append(" ")
+                    append("DirectNativeProbe=")
+                    append(OpenClRuntime.directNativeProbe().takeLast(6000))
+                }
             )
         } catch (t: Throwable) {
             val causeChain = buildDetailedErrorChain(t)
@@ -185,6 +190,7 @@ class NativeFfmpegEngine : ExecutionEngine {
     fun probeOpenClAsync(onComplete: (OpenClRuntime.ProbeResult) -> Unit) {
         val preparation = ensureOpenClStartup()
         OpenClRuntime.clearProbe()
+        val directProbe = OpenClRuntime.directNativeProbe()
 
         val probeCommand =
             "-hide_banner -nostdin -loglevel error " +
@@ -211,6 +217,8 @@ class NativeFfmpegEngine : ExecutionEngine {
 
                 val preparationDetail = buildString {
                     append(preparation.message)
+                    append(" DirectNativeProbe=")
+                    append(directProbe.takeLast(6000))
                     if (preparation.icdLibraries.isNotEmpty()) {
                         append(" ICDs=")
                         append(preparation.icdLibraries.joinToString())
@@ -228,7 +236,7 @@ class NativeFfmpegEngine : ExecutionEngine {
         } catch (t: Throwable) {
             val result = OpenClRuntime.ProbeResult(
                 available = false,
-                detail = "${preparation.message} Probe exception=${buildDetailedErrorChain(t)}"
+                detail = "${preparation.message} DirectNativeProbe=${directProbe.takeLast(6000)} Probe exception=${buildDetailedErrorChain(t)}"
             )
             OpenClRuntime.setProbeResult(result)
             onComplete(result)
