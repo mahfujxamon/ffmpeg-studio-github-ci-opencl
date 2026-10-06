@@ -24,4 +24,4 @@ The app currently uses the GPL FFmpegKit variant. Keep that only if the licensin
 
 The app initializes `OCL_ICD_FILENAMES` before the first FFmpegKit native call. It scans standard Android Khronos ICD registration directories for `.icd` files and passes the referenced implementation libraries to the official Khronos loader. No Samsung/Mali vendor OpenCL binary is packaged. The app also runs a small FFmpeg-backed OpenCL device initialization probe so the UI can distinguish “configured” from “actually usable”.
 
-The runtime probe only verifies OpenCL device initialization. It does not claim that every OpenCL filter or every vendor driver is bug-free. MediaCodec encoders are likewise opportunistic: when no compatible hardware encoder is available, the engine falls back to a software encoder.
+The runtime probe only verifies OpenCL device initialization. It does not claim that every OpenCL filter or every vendor driver is bug-free.

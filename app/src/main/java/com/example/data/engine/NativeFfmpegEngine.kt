@@ -197,8 +197,10 @@ class NativeFfmpegEngine : ExecutionEngine {
 
         val probeCommand =
             "-hide_banner -nostdin -loglevel error " +
-                "-init_hw_device opencl=ocl " +
+                "-init_hw_device opencl=ocl:0.0 " +
+                "-filter_hw_device ocl " +
                 "-f lavfi -i color=c=black:s=16x16:r=1 " +
+                "-vf \"hwupload,unsharp_opencl=lx=5:ly=5:la=1.5,hwdownload,format=yuv420p\" " +
                 "-frames:v 1 -f null -"
 
         try {
@@ -207,7 +209,7 @@ class NativeFfmpegEngine : ExecutionEngine {
             ) { session ->
                 val success = ReturnCode.isSuccess(session.returnCode)
                 val detail = if (success) {
-                    "OpenCL device initialization succeeded."
+                    "OpenCL hardware-filter smoke test succeeded (device init + hwupload + unsharp_opencl + hwdownload)."
                 } else {
                     val failure = session.failStackTrace
                     val logs = session.logsAsString
