@@ -111,13 +111,30 @@ class AssetResolver(private val context: Context) {
             currentCommand = currentCommand.replace(originalMatchStr, replacement)
         }
 
-        // 2. Match secondary -i inputs (relative paths that are not {input} macro and not network URLs)
+        // 2. Match secondary -i inputs (relative paths that are not {input} macro,
+        // virtual FFmpeg inputs, or network URLs).
+        //
+        // IMPORTANT: `-f lavfi -i color=...` is a generated/virtual input, NOT an
+        // external asset. Treating the lavfi graph as a filename is what caused
+        // commands such as `color=c=red:s=320x240:d=2` to be rejected by the app
+        // before FFmpeg ever received them.
         val inputArgRegex = Regex("""(?<=\s)-i\s+['"]?([^'"\s]+)['"]?""")
         for (match in inputArgRegex.findAll(currentCommand)) {
             val inputPath = match.groupValues[1]
-            if (inputPath == "{input}" || inputPath.startsWith("/") ||
-                inputPath.startsWith("http://") || inputPath.startsWith("https://") ||
-                inputPath.startsWith("rtmp://") || inputPath.startsWith("content://")) {
+
+            // FFmpeg virtual/filter inputs are not imported assets. The most
+            // important case for OpenCL smoke tests is `-f lavfi -i color=...`.
+            if (isVirtualFfmpegInput(currentCommand, match) ||
+                inputPath == "{input}" ||
+                inputPath == "-" ||
+                inputPath.startsWith("/") ||
+                inputPath.startsWith("http://") ||
+                inputPath.startsWith("https://") ||
+                inputPath.startsWith("rtmp://") ||
+                inputPath.startsWith("content://") ||
+                inputPath.startsWith("pipe:") ||
+                inputPath.startsWith("fd:") ||
+                inputPath.startsWith("data:")) {
                 continue
             }
 
@@ -133,6 +150,21 @@ class AssetResolver(private val context: Context) {
         }
 
         return AssetResolutionResult.Success(currentCommand, resolvedAssets)
+    }
+
+
+    /**
+     * Returns true when an -i argument belongs to FFmpeg's virtual lavfi input
+     * format rather than a user-provided file. Only the `-f lavfi -i ...`
+     * relationship is used here, so normal relative media files still require
+     * importing into FFmpeg Assets.
+     */
+    private fun isVirtualFfmpegInput(command: String, inputMatch: MatchResult): Boolean {
+        val prefix = command.substring(0, inputMatch.range.first)
+        return Regex(
+            """(?:^|\s)-f\s+['\"]?lavfi['\"]?\s*$""",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(prefix)
     }
 
     /**
