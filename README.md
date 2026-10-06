@@ -29,3 +29,10 @@ This build links the official Khronos OpenCL ICD Loader. At app startup, the run
 The app performs a small FFmpeg-backed OpenCL initialization probe and reports whether an OpenCL device could actually be initialized. A successful FFmpeg build alone is not treated as proof of GPU execution.
 
 Note: OpenCL is not an automatic replacement for every CPU filter. Commands must request an OpenCL-capable filter/hardware path to use GPU processing. When the command does not request OpenCL, the existing CPU filter path remains unchanged.
+
+
+### v10 status cleanup
+
+The OpenCL hardware-filter smoke test can end with FFmpeg return code 0 and no
+output path because it writes to the null muxer. The UI now reports that as
+success rather than `Execution failed with return code 0`.

@@ -326,7 +326,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 activeSession = null
                 val durationMs = System.currentTimeMillis() - startedAt
 
-                if (success && outputPath != null) {
+                if (success) {
+                    // A successful FFmpeg command can legitimately have no file output
+                    // path (e.g. `-f null -` smoke tests). Do not misreport return code 0
+                    // as an execution failure. Normal render commands still go through
+                    // the output-file validation/publishing path below.
+                    if (outputPath == null) {
+                        logsList.add("[COMPLETE] FFmpeg finished successfully (return code $returnCode); no output file was requested.")
+                        _terminalLogs.value = logsList.toList()
+                        emitMessage("FFmpeg command completed successfully.")
+                        return@execute
+                    }
+
                     val outFile = File(outputPath)
                     val fileSize = if (outFile.exists()) outFile.length() else 0L
 

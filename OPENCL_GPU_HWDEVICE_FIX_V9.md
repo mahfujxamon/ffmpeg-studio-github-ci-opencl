@@ -1,4 +1,4 @@
-# OpenCL GPU hw-device propagation v9
+# OpenCL GPU hw-device propagation v10
 
 ## What this fixes
 
@@ -30,3 +30,12 @@ A successful build/runtime should contain lines similar to:
 After that, the `hwupload` error should disappear. The next expected blocker,
 if any, will be a real OpenCL hardware-frame/format constraint or kernel/runtime
 problem rather than missing filter-device propagation.
+
+
+## v10 app-level fix
+
+The FFmpeg OpenCL GPU smoke test uses `-f null -`, so there is intentionally no
+output file path. The UI previously treated `success=true` + `returnCode=0` +
+`outputPath=null` as an execution failure. v10 reports that case as a successful
+FFmpeg test instead of adding a false `[ERROR]` line. Normal file renders still
+validate the output file and publish it to MediaStore.
