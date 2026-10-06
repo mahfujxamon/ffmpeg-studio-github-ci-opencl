@@ -6,6 +6,7 @@
 #include <vector>
 #include <sstream>
 #include <cstdint>
+#include <cstdlib>
 
 #define LOG_TAG "OpenClRuntimeProbe"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -20,6 +21,7 @@ using ClGetPlatformIDs = cl_int (*)(cl_uint, cl_platform_id*, cl_uint*);
 using ClGetPlatformInfo = cl_int (*)(cl_platform_id, cl_uint, size_t, void*, size_t*);
 using ClGetDeviceIDs = cl_int (*)(cl_platform_id, uint64_t, cl_uint, cl_device_id*, cl_uint*);
 using ClGetDeviceInfo = cl_int (*)(cl_device_id, uint32_t, size_t, void*, size_t*);
+using ClIcdGetPlatformIDsKHR = cl_int (*)(cl_uint, cl_platform_id*, cl_uint*);
 
 // OpenCL enum values used only for diagnostics.
 static constexpr cl_int CL_SUCCESS = 0;
@@ -101,6 +103,7 @@ static std::string runProbe() {
         dlerror();
         auto getPlatforms = reinterpret_cast<ClGetPlatformIDs>(dlsym(h, "clGetPlatformIDs"));
         const char* symErr = dlerror();
+        auto icdGetPlatforms = reinterpret_cast<ClIcdGetPlatformIDsKHR>(dlsym(h, "clIcdGetPlatformIDsKHR"));
         if (!getPlatforms || symErr) {
             report << path << " -> loaded, clGetPlatformIDs MISSING";
             if (symErr) report << " (" << symErr << ")";
@@ -112,6 +115,12 @@ static std::string runProbe() {
         cl_uint count = 0;
         cl_int rc = getPlatforms(0, nullptr, &count);
         report << path << " -> clGetPlatformIDs rc=" << rc << " platforms=" << count;
+        report << " icd_khr_symbol=" << (icdGetPlatforms ? "yes" : "no");
+        if (icdGetPlatforms) {
+            cl_uint icdCount = 0;
+            cl_int icdRc = icdGetPlatforms(0, nullptr, &icdCount);
+            report << " icd_khr_rc=" << icdRc << " icd_khr_platforms=" << icdCount;
+        }
 
         if (rc == CL_SUCCESS && count > 0) {
             std::vector<cl_platform_id> platforms(count);
@@ -153,9 +162,50 @@ static std::string runProbe() {
     return report.str();
 }
 
+
+static bool hasUsablePlatform(const std::string& path) {
+    dlerror();
+    void* h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!h) return false;
+    dlerror();
+    auto getPlatforms = reinterpret_cast<ClGetPlatformIDs>(dlsym(h, "clGetPlatformIDs"));
+    if (!getPlatforms) { dlclose(h); return false; }
+    cl_uint count = 0;
+    cl_int rc = getPlatforms(0, nullptr, &count);
+    bool ok = (rc == CL_SUCCESS && count > 0);
+    dlclose(h);
+    return ok;
+}
+
+static std::string configureKhronosLoader() {
+    // The direct probe has already established that these are real, working
+    // device OpenCL implementations. Tell the Khronos ICD loader to use the
+    // first one that actually enumerates a platform. No vendor .so is bundled.
+    const std::vector<std::string> preferred = {
+        "/vendor/lib64/libOpenCL.so",
+        "/system/vendor/lib64/libOpenCL.so",
+        "libOpenCL.so"
+    };
+
+    for (const auto& path : preferred) {
+        if (!hasUsablePlatform(path)) continue;
+        if (setenv("OCL_ICD_FILENAMES", path.c_str(), 1) != 0) {
+            return "usable OpenCL provider found at " + path + ", but setenv(OCL_ICD_FILENAMES) failed";
+        }
+        setenv("OCL_ICD_ENABLE_TRACE", "1", 1);
+        return "configured Khronos loader OCL_ICD_FILENAMES=" + path;
+    }
+    return "no usable OpenCL provider found for Khronos loader configuration";
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_data_engine_OpenClNativeProbe_nativeProbe(JNIEnv* env, jclass) {
-    const std::string report = runProbe();
+    // Configure the process environment from the same native library that is
+    // already known to be loaded. This intentionally reuses the existing
+    // nativeProbe JNI entry point so an incremental/stale APK cannot expose
+    // a new JNI symbol mismatch.
+    const std::string loader = configureKhronosLoader();
+    const std::string report = loader + "\n" + runProbe();
     LOGD("%s", report.c_str());
     return env->NewStringUTF(report.c_str());
 }

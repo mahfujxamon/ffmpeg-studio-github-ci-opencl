@@ -23,7 +23,13 @@ object OpenClNativeProbe {
         "native OpenCL probe library could not be loaded"
     } else {
         try {
-            nativeConfigureKhronosLoader()
+            // Reuse the existing nativeProbe JNI entry point. The native side
+            // configures OCL_ICD_FILENAMES before running the diagnostic.
+            val report = nativeProbe()
+            report.lineSequence().firstOrNull { it.startsWith("configured Khronos loader") }
+                ?: report.lineSequence().firstOrNull { it.startsWith("usable OpenCL provider found") }
+                ?: report.lineSequence().firstOrNull { it.startsWith("no usable OpenCL provider") }
+                ?: "native OpenCL loader configuration result unavailable"
         } catch (t: Throwable) {
             "native OpenCL loader configuration exception: ${t.javaClass.simpleName}: ${t.message}"
         }
@@ -39,8 +45,6 @@ object OpenClNativeProbe {
         }
     }
 
-    @JvmStatic
-    private external fun nativeConfigureKhronosLoader(): String
 
     @JvmStatic
     private external fun nativeProbe(): String
