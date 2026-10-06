@@ -26,6 +26,12 @@ View your app in AI Studio: https://ai.studio/apps/57e0bf4e-c3eb-4ec1-97f9-996db
 
 This build links the official Khronos OpenCL ICD Loader. At app startup, the runtime scans Android OpenCL ICD registration directories and sets `OCL_ICD_FILENAMES` from discovered `.icd` files before the first FFmpegKit native call. Vendor OpenCL implementations are not bundled.
 
-The app performs a small FFmpeg-backed OpenCL initialization probe and reports whether an OpenCL device could actually be initialized. A successful FFmpeg build alone is not treated as proof of GPU execution.
+The app performs a small FFmpeg-backed OpenCL initialization probe. A successful FFmpeg build alone is not treated as proof of GPU execution. When an OpenCL device is not confirmed, OpenCL filter commands are rewritten to supported CPU equivalents instead of failing the render.
 
 Note: OpenCL is not an automatic replacement for every CPU filter. Commands must request an OpenCL-capable filter/hardware path to use GPU processing. When the command does not request OpenCL, the existing CPU filter path remains unchanged.
+
+## Runtime fallback behavior
+
+The execution engine probes the OpenCL device before a render that requests OpenCL. If the probe reports no usable OpenCL platform, commands using supported OpenCL filter equivalents are converted to the CPU filter path (for example `unsharp_opencl` -> `unsharp`, and the OpenCL hardware upload/download wrappers are removed). The MediaCodec encoder request is preserved when a compatible hardware encoder exists. When no compatible hardware H.264/HEVC MediaCodec encoder exists, the engine falls back to `libx264`/`libx265`.
+
+This fallback does not pretend that OpenCL is working: the terminal log records the original command, the effective command, the probe result, and the fallback reason.

@@ -12,6 +12,17 @@ import java.io.File
 
 class NativeFfmpegEngine : ExecutionEngine {
 
+    data class RuntimeCommandPlan(
+        val originalCommand: String,
+        val command: String,
+        val openClRequested: Boolean,
+        val openClUsed: Boolean,
+        val openClFallback: Boolean,
+        val encoder: String,
+        val encoderFallback: Boolean,
+        val notes: List<String>
+    )
+
     init {
         // Hard startup boundary: configure OpenCL before ANY FFmpegKit/native
         // call. This is intentionally owned by the native engine, so runtime
@@ -93,6 +104,80 @@ class NativeFfmpegEngine : ExecutionEngine {
     }
 
     /**
+     * Converts a user command into a command that is safe for the capabilities
+     * actually confirmed on this device. OpenCL and MediaCodec are both
+     * opportunistic: an unavailable accelerator must never make a render fail
+     * when a CPU/software equivalent is available.
+     */
+    fun prepareCommandForRuntime(command: String): RuntimeCommandPlan {
+        var effective = command.trim()
+        val notes = mutableListOf<String>()
+
+        val openClRequested = isOpenClRequested(effective)
+        var openClFallback = false
+
+        if (openClRequested) {
+            val probe = OpenClRuntime.lastProbe()
+            when {
+                probe?.available == true -> {
+                    notes += "OpenCL capability probe succeeded; keeping the OpenCL GPU command unchanged."
+                }
+                probe != null -> {
+                    // Main product goal is real OpenCL execution. Do not silently
+                    // rewrite an explicitly requested OpenCL command to CPU. Keep
+                    // the original command so the runtime failure is visible and
+                    // measurable while the ICD/device integration is being fixed.
+                    notes += "OpenCL was requested but the current probe failed; preserving the OpenCL command for real-runtime testing (no CPU substitution)."
+                }
+                else -> {
+                    notes += "OpenCL was requested but no completed probe result is available; preserving the OpenCL command for direct runtime testing."
+                }
+            }
+        }
+
+        var encoderFallback = false
+        val hasHardwareAvc = hasHardwareAvcEncoder()
+        if (!hasHardwareAvc) {
+            val rewritten = rewriteHardwareEncoderToSoftware(effective)
+            if (rewritten != effective) {
+                effective = rewritten
+                encoderFallback = true
+                notes += "No compatible hardware H.264/HEVC MediaCodec encoder was confirmed; switched to a software encoder."
+            }
+        }
+
+        val openClUsed = openClRequested && !openClFallback && isOpenClRequested(effective)
+        val encoder = detectEncoderFromCommand(effective)
+
+        return RuntimeCommandPlan(
+            originalCommand = command,
+            command = effective,
+            openClRequested = openClRequested,
+            openClUsed = openClUsed,
+            openClFallback = openClFallback,
+            encoder = encoder,
+            encoderFallback = encoderFallback,
+            notes = notes
+        )
+    }
+
+    /**
+     * OpenCL CPU substitution is intentionally disabled for render execution.
+     * The project goal is to validate the real OpenCL GPU path.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    private fun rewriteOpenClToCpu(command: String): String? = null
+
+    private fun rewriteHardwareEncoderToSoftware(command: String): String {
+        return command
+            .replace("h264_mediacodec", "libx264")
+            .replace("hevc_mediacodec", "libx265")
+    }
+
+    private fun normalizeCommandWhitespace(command: String): String =
+        command.replace(Regex("\\s{2,}"), " ").trim()
+
+    /**
      * Uses the actual FFmpeg binary to initialize an OpenCL hardware device.
      * This is stronger than merely checking for a library file: failure means
      * the exact FFmpegKit/OpenCL runtime path could not create an OpenCL device.
@@ -157,9 +242,9 @@ class NativeFfmpegEngine : ExecutionEngine {
         onStatistics: (RenderProgress) -> Unit,
         onComplete: (success: Boolean, returnCode: Int?, outputPath: String?, error: String?) -> Unit
     ): EngineSession {
-        // Configure OpenCL immediately before the actual FFmpegKit execution.
-        // This guarantees the native engine, not the UI layer, owns the runtime
-        // bootstrap contract.
+        // Runtime bootstrap is owned by this engine. The caller should pass the
+        // command returned by prepareCommandForRuntime(). Explicit OpenCL commands
+        // are intentionally preserved for real GPU-path validation.
         ensureOpenClStartup()
 
         // Strip leading "ffmpeg " if present

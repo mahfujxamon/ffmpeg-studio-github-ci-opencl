@@ -258,30 +258,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _currentProgress.value = RenderProgress()
 
         val startedAt = System.currentTimeMillis()
-        val detectedEncoder = nativeEngine.detectEncoderFromCommand(finalCommand)
+        val runtimePlan = nativeEngine.prepareCommandForRuntime(finalCommand)
+        val executionCommand = runtimePlan.command
+        val detectedEncoder = runtimePlan.encoder
 
-        val encoderDescription = if (detectedEncoder == "MediaCodec AVC" && nativeEngine.hasHardwareAvcEncoder()) {
-            "MediaCodec AVC"
-        } else {
-            "Software"
+        val encoderDescription = when (detectedEncoder) {
+            "MediaCodec AVC" -> "MediaCodec AVC"
+            "Stream Copy" -> "Stream Copy"
+            else -> "Software"
         }
 
-        val openClRequested = nativeEngine.isOpenClRequested(finalCommand)
-        val processingMode = if (openClRequested) {
-            when (nativeEngine.currentOpenClProbe()?.available) {
-                true -> "Processing: OpenCL | Encoder: $encoderDescription"
-                false -> "Processing: OpenCL requested, runtime unavailable | Encoder: $encoderDescription"
-                null -> "Processing: OpenCL requested, capability checking | Encoder: $encoderDescription"
-            }
-        } else {
-            "Processing: CPU | Encoder: $encoderDescription"
+        val processingMode = when {
+            runtimePlan.openClUsed -> "Processing: OpenCL | Encoder: $encoderDescription"
+            runtimePlan.openClFallback -> "Processing: CPU fallback (OpenCL unavailable) | Encoder: $encoderDescription"
+            else -> "Processing: CPU | Encoder: $encoderDescription"
         }
 
         _renderState.value = RenderState.Rendering(
             processingMode = processingMode,
             progress = RenderProgress(),
             logs = emptyList(),
-            command = finalCommand,
+            command = executionCommand,
             startedAtMs = startedAt
         )
 
@@ -292,14 +289,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (openClPreparation.icdLibraries.isNotEmpty()) {
             logsList.add("[OPENCL] ICD candidates: ${openClPreparation.icdLibraries.joinToString()}")
         }
-        logsList.add("[COMMAND] $finalCommand")
+        if (openClPreparation.libraryCandidates.isNotEmpty()) {
+            logsList.add("[OPENCL] System libOpenCL candidates: ${openClPreparation.libraryCandidates.joinToString()}")
+        } else {
+            logsList.add("[OPENCL] No readable system libOpenCL*.so candidate discovered.")
+        }
+        nativeEngine.currentOpenClProbe()?.detail?.let {
+            logsList.add("[OPENCL PROBE] $it")
+        }
+        runtimePlan.notes.forEach { note -> logsList.add("[RUNTIME] $note") }
+        if (executionCommand != finalCommand) {
+            logsList.add("[COMMAND ORIGINAL] $finalCommand")
+            logsList.add("[COMMAND EFFECTIVE] $executionCommand")
+        } else {
+            logsList.add("[COMMAND] $executionCommand")
+        }
         _terminalLogs.value = logsList.toList()
 
         val totalDurationMs = media?.durationMs ?: 0L
 
         // Execute real FFmpegKit session
         activeSession = nativeEngine.execute(
-            command = finalCommand,
+            command = executionCommand,
             totalDurationMs = totalDurationMs,
             onLog = { logLine ->
                 logsList.add(logLine)

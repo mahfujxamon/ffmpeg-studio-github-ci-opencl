@@ -3,11 +3,57 @@ package com.example.data.engine
 import android.system.Os
 import java.io.File
 
+/**
+ * Process-wide OpenCL runtime bootstrap for Android.
+ *
+ * The app does not ship a vendor OpenCL implementation. Instead it exposes
+ * optional vendor libraries through Android's native-library namespace and
+ * lets the Khronos ICD loader try common implementation names at runtime.
+ * This mirrors the strategy used by real Android GPU/OpenCL consumers:
+ * dynamically use the device-provided OpenCL implementation rather than copy
+ * the vendor driver into the APK.
+ */
 object OpenClRuntime {
+
+    const val OCL_ICD_FILENAMES = "OCL_ICD_FILENAMES"
+    const val OCL_ICD_VENDORS = "OCL_ICD_VENDORS"
+    const val OCL_ICD_ENABLE_TRACE = "OCL_ICD_ENABLE_TRACE"
+
+    private val standardIcdDirectories = listOf(
+        "/system/vendor/Khronos/OpenCL/vendors",
+        "/vendor/Khronos/OpenCL/vendors",
+        "/odm/Khronos/OpenCL/vendors",
+        "/system_ext/vendor/Khronos/OpenCL/vendors",
+        "/product/Khronos/OpenCL/vendors",
+        "/system/etc/OpenCL/vendors",
+        "/vendor/etc/OpenCL/vendors",
+        "/odm/etc/OpenCL/vendors",
+        "/system_ext/etc/OpenCL/vendors",
+        "/product/etc/OpenCL/vendors"
+    )
+
+    /**
+     * Common Android OpenCL implementation SONAMEs used by real applications.
+     * These are runtime candidates only; no device/SoC is assumed and no
+     * vendor binary is bundled by the app.
+     *
+     * We intentionally prefer concrete implementation names before the generic
+     * libOpenCL.so name because on some systems libOpenCL.so is itself a loader.
+     */
+    private val runtimeVendorLibraryNames = listOf(
+        "libGLES_mali.so",
+        "libmali.so",
+        "libPVROCL.so",
+        "libOpenCL-pixel.so",
+        "libOpenCL-car.so",
+        "libOpenCL.so"
+    )
 
     data class Preparation(
         val configured: Boolean,
         val icdLibraries: List<String>,
+        val searchedDirectories: List<String>,
+        val libraryCandidates: List<String>,
         val message: String
     )
 
@@ -22,6 +68,7 @@ object OpenClRuntime {
     @Volatile
     private var probeCache: ProbeResult? = null
 
+    /** Explicit process-start bootstrap before any FFmpeg/OpenCL call. */
     @Synchronized
     fun startup(): Preparation = prepare()
 
@@ -29,67 +76,68 @@ object OpenClRuntime {
     fun prepare(): Preparation {
         preparationCache?.let { return it }
 
-        // Common OEM OpenCL driver paths on Android
-        val commonPaths = listOf(
-            "/vendor/lib64/libOpenCL.so",
-            "/system/vendor/lib64/libOpenCL.so",
-            "/system/lib64/libOpenCL.so",
-            "/vendor/lib64/egl/libGLES_mali.so",       // For MediaTek/Exynos
-            "/system/vendor/lib64/egl/libGLES_mali.so",
-            "/system/vendor/lib64/libOpenCL-pixel.so"  // For some custom ROMs/Pixels
+        val searched = standardIcdDirectories.toList()
+        val vendorCandidates = runtimeVendorLibraryNames.toList()
+        val existingFilenames = System.getenv(OCL_ICD_FILENAMES)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+        if (existingFilenames != null) {
+            val result = Preparation(
+                configured = true,
+                icdLibraries = splitPathList(existingFilenames),
+                searchedDirectories = searched,
+                libraryCandidates = vendorCandidates,
+                message = "OCL_ICD_FILENAMES is already provided by the process; preserving it."
+            )
+            preparationCache = result
+            return result
+        }
+
+        val discoveredIcds = discoverIcdLibraries()
+        if (discoveredIcds.isNotEmpty()) {
+            val configured = setEnvironment(
+                OCL_ICD_FILENAMES,
+                discoveredIcds.joinToString(File.pathSeparator)
+            )
+
+            val result = Preparation(
+                configured = configured,
+                icdLibraries = discoveredIcds,
+                searchedDirectories = searched,
+                libraryCandidates = vendorCandidates,
+                message = if (configured) {
+                    "Configured ${discoveredIcds.size} device OpenCL ICD registration(s) from system directories."
+                } else {
+                    "System OpenCL ICD registrations were found, but process environment setup failed."
+                }
+            )
+            preparationCache = result
+            return result
+        }
+
+        // Important Android-specific step:
+        // If no .icd file is present, many shipped Android GPU runtimes are
+        // exposed directly as shared libraries such as libGLES_mali.so.
+        // Real apps commonly load these by name. We give the Khronos loader the
+        // same vendor-library candidates through OCL_ICD_FILENAMES. Invalid or
+        // non-ICD candidates are ignored by the loader; a valid cl_khr_icd
+        // implementation can then be enumerated.
+        val configured = setEnvironment(
+            OCL_ICD_FILENAMES,
+            vendorCandidates.joinToString(File.pathSeparator)
         )
 
-        var goldenDriverPath: String? = null
-
-        // 1. The Magic RAM Pre-load Hack: Test and force-load into App Memory
-        for (path in commonPaths) {
-            if (File(path).exists()) {
-                try {
-                    // Try to forcefully load the library into the app's process via JVM
-                    System.load(path)
-                    
-                    // If we reach here without crashing, the OS Linker allowed it!
-                    goldenDriverPath = path
-                    break
-                } catch (e: UnsatisfiedLinkError) {
-                    // Linker blocked it or wrong architecture, ignore and try next
-                } catch (e: Exception) {
-                    // Other reading errors, ignore and try next
-                }
-            }
-        }
-
-        if (goldenDriverPath != null) {
-            try {
-                // 2. Now that the driver is officially in our app's RAM,
-                // tell Khronos loader exactly which file to ask for.
-                Os.setenv("OCL_ICD_FILENAMES", goldenDriverPath, true)
-                Os.setenv("OCL_ICD_ENABLE_TRACE", "1", true) // For debugging in logcat
-
-                val result = Preparation(
-                    configured = true,
-                    icdLibraries = listOf(goldenDriverPath),
-                    message = "Successfully pre-loaded and mapped OpenCL driver: $goldenDriverPath"
-                )
-                preparationCache = result
-                return result
-
-            } catch (e: Exception) {
-                val result = Preparation(
-                    configured = false,
-                    icdLibraries = listOf(goldenDriverPath),
-                    message = "Pre-loaded $goldenDriverPath but env setup failed: ${e.message}"
-                )
-                preparationCache = result
-                return result
-            }
-        }
-
-        // If OS blocked every single file or none exist
         val result = Preparation(
-            configured = false,
-            icdLibraries = emptyList(),
-            message = "No valid, accessible native OpenCL driver found on this device."
+            configured = configured,
+            icdLibraries = vendorCandidates,
+            searchedDirectories = searched,
+            libraryCandidates = vendorCandidates,
+            message = if (configured) {
+                "No .icd registration found; configured runtime vendor-library candidates for Khronos loader discovery."
+            } else {
+                "No .icd registration found and runtime vendor-library environment setup failed."
+            }
         )
         preparationCache = result
         return result
@@ -100,4 +148,63 @@ object OpenClRuntime {
     fun setProbeResult(result: ProbeResult) {
         probeCache = result
     }
+
+    fun clearProbe() {
+        probeCache = null
+    }
+
+    private fun setEnvironment(name: String, value: String): Boolean {
+        return try {
+            Os.setenv(name, value, true)
+            try {
+                Os.setenv(OCL_ICD_ENABLE_TRACE, "1", true)
+            } catch (_: Throwable) {
+                // Diagnostic tracing is optional.
+            }
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun discoverIcdLibraries(): List<String> {
+        val libraries = linkedSetOf<String>()
+
+        for (directoryPath in standardIcdDirectories) {
+            val directory = File(directoryPath)
+            val entries = try {
+                directory.listFiles { file ->
+                    file.isFile && file.extension.equals("icd", ignoreCase = true)
+                }?.sortedBy { it.name }
+            } catch (_: Throwable) {
+                null
+            }
+
+            entries?.forEach { registrationFile ->
+                val registration = try {
+                    registrationFile.readLines()
+                        .asSequence()
+                        .map { it.trim() }
+                        .firstOrNull { line ->
+                            line.isNotEmpty() &&
+                                !line.startsWith("#") &&
+                                !line.startsWith(";")
+                        }
+                } catch (_: Throwable) {
+                    null
+                }
+
+                if (!registration.isNullOrBlank()) {
+                    libraries += registration.trim().trim('"', '\'')
+                }
+            }
+        }
+
+        return libraries.toList()
+    }
+
+    private fun splitPathList(value: String): List<String> =
+        value.split(File.pathSeparatorChar)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
 }

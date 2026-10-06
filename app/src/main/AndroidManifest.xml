@@ -15,6 +15,33 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication">
+
+        <!--
+            Optional vendor-provided OpenCL runtimes.
+
+            Android 12+ hides non-NDK vendor native libraries from an app
+            namespace unless they are explicitly declared. OpenCL-capable
+            apps commonly request these libraries as optional dependencies.
+            We do NOT bundle any of them; Android supplies them when present.
+        -->
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libOpenCL-car.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libOpenCL-pixel.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libGLES_mali.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libmali.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libPVROCL.so"
+            android:required="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
