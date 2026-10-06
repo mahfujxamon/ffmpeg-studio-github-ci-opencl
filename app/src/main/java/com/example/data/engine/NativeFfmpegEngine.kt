@@ -196,7 +196,7 @@ class NativeFfmpegEngine : ExecutionEngine {
         OpenClRuntime.clearProbe()
 
         val probeCommand =
-            "-hide_banner -nostdin -loglevel verbose " +
+            "-hide_banner -nostdin -loglevel error " +
                 "-init_hw_device opencl=ocl:0.0 " +
                 "-filter_hw_device ocl " +
                 "-f lavfi -i color=c=black:s=16x16:r=1 " +
