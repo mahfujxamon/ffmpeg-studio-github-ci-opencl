@@ -74,6 +74,24 @@ jobs:
           echo "=== AAR contents ==="
           unzip -l "$AAR_OUT"
 
+      - name: Create debug keystore
+        run: |
+          set -eux
+          KEYSTORE="debug.keystore"
+          if [ ! -f "$KEYSTORE" ]; then
+            keytool -genkeypair \
+              -keystore "$KEYSTORE" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          test -s "$KEYSTORE"
+          ls -lh "$KEYSTORE"
+
       - name: Build debug APK
         run: |
           set -eux
