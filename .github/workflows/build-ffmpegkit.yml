@@ -676,6 +676,8 @@ jobs:
         run: |
           set -euxo pipefail
 
+          # android/jni/Android.mk sets LOCAL_PATH to this directory; these
+          # are the actual fftools sources compiled into libffmpegkit.so.
           CPP_DIR="${GITHUB_WORKSPACE}/ffmpegkit/android-8.1-lts/android/ffmpeg-kit-android-lib/src/main/cpp"
           FILTER_C="${CPP_DIR}/fftools_ffmpeg_filter.c"
           HW_C="${CPP_DIR}/fftools_ffmpeg_hw.c"
@@ -696,6 +698,10 @@ jobs:
           grep -nE \
             'FFMPEGKIT_HWDEVICE_BEFORE_FILTER_INIT|hw_device_for_filter|graph_parse.*hw_device|f->hw_device_ctx' \
             "$FILTER_C" "$HW_C" "$HEADER"
+
+          grep -q 'FFMPEGKIT_HWDEVICE_BEFORE_FILTER_INIT' "$FILTER_C"
+          grep -q 'FFMPEGKIT_HWDEVICE_BEFORE_FILTER_INIT' "$HW_C"
+          grep -q 'FFMPEGKIT_HWDEVICE_BEFORE_FILTER_INIT' "$HEADER"
 
 
       # ============================================================
@@ -1187,6 +1193,19 @@ jobs:
           echo "========================================"
           echo "OpenCL diagnostic completed."
           echo "========================================"
+
+
+      # ============================================================
+      # 22.5 Verify hw-device propagation code reached compiled ELF
+      # ============================================================
+      - name: Verify compiled hw-device propagation
+        run: |
+          set -euxo pipefail
+
+          SO="/tmp/aar-check/jni/arm64-v8a/libffmpegkit.so"
+          test -f "$SO"
+          strings "$SO" | grep -F '[FFMPEGKIT HWDEVICE] attached device to filter'
+          echo "Compiled hw-device propagation guard: PASS"
 
 
       # ============================================================
