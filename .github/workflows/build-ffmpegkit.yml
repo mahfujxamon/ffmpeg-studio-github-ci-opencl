@@ -36,6 +36,15 @@ jobs:
       - name: Checkout app
         uses: actions/checkout@v4
 
+      # The authoritative FFmpegKit binary is always built from the fresh pinned
+      # source tree below. Do not let an uploaded/exposed AAR or stale JNI payload
+      # influence the native build or the final APK.
+      - name: Remove exposed/prebuilt FFmpeg artifacts
+        run: |
+          set -euxo pipefail
+          rm -rf app/ffmpeg-kit-custom
+          rm -rf app/libs
+
 
       # ============================================================
       # 2. Java
@@ -563,30 +572,14 @@ jobs:
       # ============================================================
       # 15. Patch FFmpeg Android configure
       #
-      # IMPORTANT FIXES:
+      # OpenCL uses the official Khronos headers + ICD loader. OpenSSL is kept
+      # enabled; GnuTLS is disabled at the FFmpegKit library-selection layer.
       #
-      # 1. Enable OpenCL.
-      # 2. Use official Khronos static loader.
-      # 3. Add -ldl separately as another --extra-libs argument.
-      #    This prevents "-ldl" from becoming an unknown configure
-      #    option.
-      #
-      # 4. Force OpenSSL OFF.
-      #    FFmpegKit Android ffmpeg.sh contains:
-      #
-      #       CONFIGURE_POSTFIX+=" --enable-openssl"
-      #
-      #    while GnuTLS is also enabled.
-      #
-      # 5. Do NOT remove arbitrary lines containing "opencl".
-      #    Only patch the exact OpenSSL line and inject our block.
-      # ============================================================
-      - name: Enable Khronos OpenCL and disable OpenSSL
+      - name: Enable Khronos OpenCL and use OpenSSL
         run: |
           set -euxo pipefail
 
           FFMPEG_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/ffmpeg.sh"
-
           OPENCL_HEADERS="${GITHUB_WORKSPACE}/opencl-headers"
           OPENCL_LOADER="${GITHUB_WORKSPACE}/icd-loader/build/libOpenCL.a"
           OPENCL_LOADER_DIR="${GITHUB_WORKSPACE}/icd-loader/build"
@@ -596,83 +589,33 @@ jobs:
           test -f "$OPENCL_LOADER"
           test -d "$OPENCL_LOADER_DIR"
 
-          echo "========================================"
-          echo "OPENCL INPUTS"
-          echo "========================================"
-          echo "Headers      : $OPENCL_HEADERS"
-          echo "Loader       : $OPENCL_LOADER"
-          echo "Loader dir   : $OPENCL_LOADER_DIR"
-
-          python3 \
-            - "$FFMPEG_SCRIPT" "$OPENCL_HEADERS" "$OPENCL_LOADER_DIR" \
-            <<'PY'
+          python3 - "$FFMPEG_SCRIPT" "$OPENCL_HEADERS" "$OPENCL_LOADER_DIR" <<'PYIN'
           from pathlib import Path
           import sys
 
           script = Path(sys.argv[1])
           headers = sys.argv[2]
           loader_dir = sys.argv[3]
-
           text = script.read_text()
 
-          # --------------------------------------------------------
-          # Remove only our previous generated OpenCL block.
-          # --------------------------------------------------------
           begin_marker = "# BEGIN FFMPEGKIT_KHRONOS_OPENCL"
           end_marker = "# END FFMPEGKIT_KHRONOS_OPENCL"
-
           if begin_marker in text and end_marker in text:
               start = text.index(begin_marker)
               end = text.index(end_marker, start) + len(end_marker)
-
               text = text[:start] + text[end:]
 
-          # --------------------------------------------------------
-          # Disable OpenSSL in Android FFmpeg configure.
-          # --------------------------------------------------------
-          openssl_enable = 'CONFIGURE_POSTFIX+=" --enable-openssl"'
+          # Normalize any stale/generated SSL override back to OpenSSL.
+          text = text.replace(
+              'CONFIGURE_POSTFIX+=" --disable-openssl"',
+              'CONFIGURE_POSTFIX+=" --enable-openssl"'
+          )
 
-          if openssl_enable in text:
-              text = text.replace(
-                  openssl_enable,
-                  'CONFIGURE_POSTFIX+=" --disable-openssl"',
-                  1
-              )
-              print("OpenSSL enable flag replaced with disable.")
-          else:
-              print("WARNING: --enable-openssl line was not found.")
-
-          # --------------------------------------------------------
-          # CONFIGURE_POSTFIX anchor.
-          # --------------------------------------------------------
           anchor = 'CONFIGURE_POSTFIX=""'
-
           if anchor not in text:
-              raise SystemExit(
-                  "ERROR: CONFIGURE_POSTFIX anchor not found"
-              )
+              raise SystemExit("ERROR: CONFIGURE_POSTFIX anchor not found")
 
-          # --------------------------------------------------------
-          # IMPORTANT:
-          #
-          # FFmpeg's own OpenCL check uses:
-          #
-          #     -lOpenCL
-          #
-          # Therefore we MUST provide:
-          #
-          #     -L<directory-containing-libOpenCL.a>
-          #
-          # Do NOT pass the absolute .a file as --extra-libs.
-          #
-          # -ldl is supplied separately.
-          # --------------------------------------------------------
-          opencl_block = f'''# BEGIN FFMPEGKIT_KHRONOS_OPENCL
-          # Official Khronos OpenCL-Headers.
-          # Official Khronos OpenCL-ICD-Loader static archive.
-          #
-          # FFmpeg configure itself supplies -lOpenCL.
-          # We only need to expose the loader directory.
+          block = f'''# BEGIN FFMPEGKIT_KHRONOS_OPENCL
           CONFIGURE_POSTFIX+=" --enable-opencl"
           CONFIGURE_POSTFIX+=" --extra-cflags=-DCL_TARGET_OPENCL_VERSION=120"
           CONFIGURE_POSTFIX+=" --extra-cflags=-I{headers}"
@@ -680,69 +623,25 @@ jobs:
           CONFIGURE_POSTFIX+=" --extra-libs=-ldl"
           # END FFMPEGKIT_KHRONOS_OPENCL
           '''
+          text = text.replace(anchor, anchor + "\n" + block, 1)
 
-          text = text.replace(
-              anchor,
-              anchor + "\n" + opencl_block,
-              1
-          )
-
-          # --------------------------------------------------------
-          # Final OpenSSL override.
-          # --------------------------------------------------------
-          final_ssl_marker = "# FFMPEGKIT_FINAL_SSL_OVERRIDE"
-
-          if final_ssl_marker not in text:
-
-              final_ssl_block = f'''
-          {final_ssl_marker}
-          CONFIGURE_POSTFIX+=" --disable-openssl"
-          '''
-
-              configure_anchor = './configure \\'
-
-              if configure_anchor not in text:
-                  raise SystemExit(
-                      "ERROR: ./configure anchor not found"
-                  )
-
-              text = text.replace(
-                  configure_anchor,
-                  final_ssl_block + "\n" + configure_anchor,
-                  1
-              )
+          # Assert the exact intended SSL state in the resulting script.
+          if '--enable-openssl' not in text:
+              text += '\nCONFIGURE_POSTFIX+=" --enable-openssl"\n'
+          if '--disable-openssl' in text:
+              raise SystemExit("ERROR: --disable-openssl remains after normalization")
 
           script.write_text(text)
+          print("PASS: OpenCL loader configuration installed")
+          print("PASS: OpenSSL retained")
+          print("PASS: GnuTLS will be disabled by android.sh library selection")
+          PYIN
 
-          print("========================================")
-          print("FFmpeg OpenCL configuration installed")
-          print("========================================")
-          print(f"Headers    : {headers}")
-          print(f"Loader dir : {loader_dir}")
-          PY
-
-          echo
-          echo "========================================"
-          echo "FINAL OPENCL/SSL CONFIGURATION"
-          echo "========================================"
-
-          grep -nE \
-            'FFMPEGKIT_KHRONOS_OPENCL|enable-opencl|extra-cflags|extra-ldflags|extra-libs|enable-openssl|disable-openssl|FINAL_SSL_OVERRIDE' \
-            "$FFMPEG_SCRIPT" \
-            || true
-
-          echo
-          echo "========================================"
-          echo "VERIFY LOADER"
-          echo "========================================"
-
-          test -f "${OPENCL_LOADER_DIR}/libOpenCL.a"
-
-          ls -lh \
-            "${OPENCL_LOADER_DIR}/libOpenCL.a"
+          ! grep -n -- '--disable-openssl' "$FFMPEG_SCRIPT"
+          grep -n -- '--enable-openssl' "$FFMPEG_SCRIPT"
+          grep -n -- '--enable-opencl' "$FFMPEG_SCRIPT"
 
 
-      # ============================================================
       # 16. Patch FFmpegKit fftools hardware-device propagation
       #
       # FFmpeg 8.1's hwupload initializes early and requires
@@ -833,26 +732,12 @@ jobs:
 
           echo
           echo "========================================"
-          echo "GNUTLS"
+          echo "GNUTLS DISABLED / OPENSSL ENABLED"
           echo "========================================"
 
-          grep -n \
-            'enable-gnutls' \
-            "$FFMPEG_SCRIPT"
-
-          echo
-          echo "========================================"
-          echo "OPENSSL"
-          echo "========================================"
-
-          if grep -n -- '--enable-openssl' "$FFMPEG_SCRIPT"; then
-            echo "ERROR: --enable-openssl is still enabled."
-            exit 1
-          fi
-
-          grep -n \
-            -- '--disable-openssl' \
-            "$FFMPEG_SCRIPT"
+          grep -n -- '--enable-openssl' "$FFMPEG_SCRIPT"
+          grep -n '^    gnutls)' "$FFMPEG_SCRIPT"
+          ! grep -n -- '--disable-openssl' "$FFMPEG_SCRIPT"
 
           echo
           echo "========================================"
@@ -875,66 +760,67 @@ jobs:
 
 
       # ============================================================
-      # 18. Patch GnuTLS for Android NDK 27 Clang compatibility
-      # ============================================================
-      - name: Patch GnuTLS for Android NDK 27.2
+      # 17.5. Install n8.1.3 scale_opencl compatibility hook
+      #
+      # The FFmpegKit build downloads FFmpeg inside downloaded_library_sources().
+      # Apply the scale_opencl source compatibility transform immediately after
+      # the normal FFmpeg patch set, when vf_scale_opencl.c actually exists.
+      #
+      - name: Install n8.1.3 scale_opencl compatibility hook
         run: |
-          set -eux
+          set -euxo pipefail
 
-          GNUTLS_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/gnutls.sh"
+          FUNCTION_SH="ffmpegkit/android-8.1-lts/scripts/function.sh"
+          test -f "$FUNCTION_SH"
+          test -f "scripts/compat-scale-opencl-n813.py"
 
-          test -f "$GNUTLS_SCRIPT"
-
-          python3 - "$GNUTLS_SCRIPT" <<'PY'
+          python3 - "$FUNCTION_SH" <<'PYIN'
           from pathlib import Path
           import sys
 
           path = Path(sys.argv[1])
           text = path.read_text()
-
-          marker = "PATCH_GNUTLS_ANDROID_CLANG_FLAGS"
-
+          marker = "# FFMPEGKIT_N813_SCALE_OPENCL_HOOK"
           if marker in text:
-              print("GnuTLS Android Clang compatibility patch already installed.")
-              sys.exit(0)
+              print("PASS: scale_opencl n8.1.3 hook already installed")
+              raise SystemExit(0)
 
-          anchor = 'if [[ ! -f "${BASEDIR}"/src/"${LIB_NAME}"/configure ]]'
-
+          anchor = '  apply_library_patches "ffmpeg"\n'
           if anchor not in text:
-              raise SystemExit(
-                  "ERROR: GnuTLS configure anchor not found"
-              )
+              raise SystemExit("ERROR: FFmpeg patch hook anchor not found")
 
-          patch = r'''
-          # PATCH_GNUTLS_ANDROID_CLANG_FLAGS
-          # Android NDK 27 Clang compatibility.
-          export CFLAGS="${CFLAGS:-} \
-          -Wno-error=implicit-function-declaration \
-          -Wno-error=incompatible-pointer-types \
-          -Wno-error=int-conversion \
-          -Wno-error=deprecated-non-prototype"
-          '''
-
-          text = text.replace(
-              anchor,
-              patch + anchor,
-              1
+          hook = (
+              '  # FFMPEGKIT_N813_SCALE_OPENCL_HOOK\n'
+              '  python3 "${BASEDIR}/../../scripts/compat-scale-opencl-n813.py" '
+              '"${BASEDIR}/src/ffmpeg/libavfilter/vf_scale_opencl.c" || exit 1\n'
           )
-
+          text = text.replace(anchor, anchor + hook, 1)
           path.write_text(text)
+          print("PASS: scale_opencl n8.1.3 compatibility hook installed")
+          PYIN
 
-          print(
-              "GnuTLS Android Clang compatibility patch installed."
-          )
-          PY
-
-          grep -n \
-            -B2 -A7 \
-            "PATCH_GNUTLS_ANDROID_CLANG_FLAGS" \
-            "$GNUTLS_SCRIPT"
+          grep -n -A4 -B1 \
+            "FFMPEGKIT_N813_SCALE_OPENCL_HOOK" \
+            "$FUNCTION_SH"
 
 
       # ============================================================
+      # 18. Verify OpenSSL-only TLS selection
+      # ============================================================
+      - name: Verify OpenSSL-only TLS selection
+        run: |
+          set -euxo pipefail
+
+          FFMPEG_SCRIPT="ffmpegkit/android-8.1-lts/scripts/android/ffmpeg.sh"
+          test -f "$FFMPEG_SCRIPT"
+
+          # GnuTLS is disabled as a library in the android.sh invocation.
+          # The ffmpeg.sh case remains present but is never entered when the
+          # gnutls library is disabled after --full.
+          grep -n '^    gnutls)' "$FFMPEG_SCRIPT"
+          grep -n -- '--enable-openssl' "$FFMPEG_SCRIPT"
+
+
       # 19. Final pre-build sanity check
       # ============================================================
       - name: Final native build sanity check
@@ -993,6 +879,15 @@ jobs:
             "${GITHUB_WORKSPACE}/scripts/adapt-opencl-scale-patch.py"
           python3 -m py_compile \
             "${GITHUB_WORKSPACE}/scripts/adapt-opencl-scale-patch.py"
+          python3 -m py_compile \
+            "${GITHUB_WORKSPACE}/scripts/compat-scale-opencl-n813.py"
+
+          grep -F "FFMPEGKIT_N813_SCALE_OPENCL_HOOK" \
+            ffmpegkit/android-8.1-lts/scripts/function.sh
+
+          ! grep -n -- '--disable-openssl' "$FFMPEG_SCRIPT"
+          grep -n -- '--enable-openssl' "$FFMPEG_SCRIPT"
+          grep -n '^    gnutls)' "$FFMPEG_SCRIPT"
 
           echo
           echo "========================================"
@@ -1027,6 +922,8 @@ jobs:
             --full \
             --enable-gpl \
             --enable-android-media-codec \
+            --enable-openssl \
+            --disable-lib-gnutls \
             --disable-arm-v7a \
             --disable-arm-v7a-neon \
             --disable-x86 \

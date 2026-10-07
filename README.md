@@ -74,3 +74,8 @@ present in stock n8.1.3, so CI generates and applies a deterministic compatibili
 header as a second patch. The OpenCL headers are compiled with
 `CL_TARGET_OPENCL_VERSION=120` to avoid an implicit OpenCL 3.1 header default.
 
+
+
+## Native FFmpegKit build source
+
+CI intentionally ignores the checked-in/exposed `app/ffmpeg-kit-custom` JNI payload. The authoritative FFmpegKit AAR is generated from the pinned FFmpegKit/FFmpeg sources in the workflow. GnuTLS is disabled and OpenSSL is enabled for the native build.

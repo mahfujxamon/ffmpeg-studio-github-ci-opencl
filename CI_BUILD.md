@@ -9,10 +9,12 @@ The workflow:
 3. Uses Java 21 and Android NDK r27c (`27.2.12479018`).
 4. Clones `v8.1.9-lts-android` exactly.
 5. Builds arm64-v8a with MediaCodec and GPL/full options.
-6. Builds and statically links the official Khronos OpenCL ICD Loader, then configures FFmpeg with OpenCL support without bundling a vendor implementation.
-7. Verifies ELF LOAD alignment is at least 16 KB.
-8. Builds the Android app against the generated `app/libs/ffmpeg-kit.aar`.
-9. Uploads the AAR, APK, and build logs as GitHub Actions artifacts.
+6. Disables the GnuTLS library and explicitly enables OpenSSL to avoid the GnuTLS/NDK configure probes.
+7. Builds and statically links the official Khronos OpenCL ICD Loader, then configures FFmpeg with OpenCL support without bundling a vendor implementation.
+8. Applies the maintained `scale_opencl` backport and a narrowly-scoped n8.1.3 compatibility transform that removes only the unavailable `AV_PIX_FMT_NV15` path while retaining YUV420P/NV12/P010/P016 scaling and dithering.
+9. Verifies ELF LOAD alignment is at least 16 KB.
+10. Builds the Android app against the freshly generated `app/libs/ffmpeg-kit.aar`; uploaded/exposed AAR/JNI payloads are removed first.
+11. Uploads the AAR, APK, and build logs as GitHub Actions artifacts.
 
 The OpenCL loader is runtime-based: it attempts to load the device's permitted `libOpenCL.so` and resolves the OpenCL 1.2 core entry points dynamically. A vendor Samsung/Mali OpenCL binary is not committed or packaged.
 

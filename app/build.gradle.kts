@@ -85,9 +85,8 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 // This makes it easy to add them back in the future if needed.
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
-  // Local custom FFmpegKit AAR.
-  // CI creates app/libs/ffmpeg-kit-custom.aar from the exploded AAR directory
-  // app/ffmpeg-kit-custom/ before Gradle runs.
+  // Local custom FFmpegKit AAR generated fresh by CI from the native FFmpegKit build.
+  // No checked-in/exposed JNI payload is used.
   val customFfmpegAar = file("libs/ffmpeg-kit-custom.aar")
   if (!customFfmpegAar.exists()) {
     throw GradleException(
