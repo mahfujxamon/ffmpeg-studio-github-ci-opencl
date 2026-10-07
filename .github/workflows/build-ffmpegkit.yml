@@ -674,6 +674,7 @@ jobs:
           # FFmpeg configure itself supplies -lOpenCL.
           # We only need to expose the loader directory.
           CONFIGURE_POSTFIX+=" --enable-opencl"
+          CONFIGURE_POSTFIX+=" --extra-cflags=-DCL_TARGET_OPENCL_VERSION=120"
           CONFIGURE_POSTFIX+=" --extra-cflags=-I{headers}"
           CONFIGURE_POSTFIX+=" --extra-ldflags=-L{loader_dir}"
           CONFIGURE_POSTFIX+=" --extra-libs=-ldl"
@@ -812,6 +813,10 @@ jobs:
 
           grep -n \
             'CONFIGURE_POSTFIX+=" --enable-opencl"' \
+            "$FFMPEG_SCRIPT"
+
+          grep -n \
+            'CL_TARGET_OPENCL_VERSION=120' \
             "$FFMPEG_SCRIPT"
 
           grep -n \

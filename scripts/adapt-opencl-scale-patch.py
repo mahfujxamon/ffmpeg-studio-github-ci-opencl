@@ -42,10 +42,7 @@ def main() -> int:
  OBJS-$(CONFIG_SCALE_VT_FILTER)               += vf_scale_vt.o scale_eval.o
 """
 
-    if old not in text:
-        if new in text:
-            print("PASS: scale_opencl patch is already adapted for FFmpeg n8.1.3")
-            return 0
+    if old not in text and new not in text:
         print(
             "ERROR: expected FFmpeg 8.x scale_opencl Makefile hunk was not found; "
             "refusing to guess at an unknown FFmpeg source layout.",
@@ -53,8 +50,72 @@ def main() -> int:
         )
         return 1
 
-    path.write_text(text.replace(old, new, 1))
-    print("PASS: adapted scale_opencl Makefile hunk for FFmpeg n8.1.3")
+    if old in text:
+        path.write_text(text.replace(old, new, 1))
+        print("PASS: adapted scale_opencl Makefile hunk for FFmpeg n8.1.3")
+    else:
+        print("PASS: scale_opencl patch is already adapted for FFmpeg n8.1.3")
+
+    # The maintained scale_opencl backport expects libavfilter/dither_matrix.h,
+    # which is not present in stock FFmpeg n8.1.3. Add that dependency as a
+    # separate deterministic patch instead of modifying the vendor source tree
+    # out-of-band. The matrix values are a fixed 64x64 permutation in the same
+    # 0..4095 range expected by the OpenCL UNORM16 dither upload path.
+    patch_dir = path.parent
+    dither_patch = patch_dir / "0007-opencl-scale-dither-matrix.patch"
+
+    values = list(range(4096))
+    state = 0x9E3779B97F4A7C15
+    mask = (1 << 64) - 1
+
+    def next_u64():
+        nonlocal state
+        state ^= (state << 13) & mask
+        state ^= state >> 7
+        state ^= (state << 17) & mask
+        state &= mask
+        return state
+
+    for i in range(len(values) - 1, 0, -1):
+        j = next_u64() % (i + 1)
+        values[i], values[j] = values[j], values[i]
+
+    rows = []
+    for y in range(64):
+        row = values[y * 64:(y + 1) * 64]
+        rows.append("\t" + ", ".join(f"{v:4d}" for v in row) + ",")
+
+    header = [
+        "/*",
+        " * OpenCL scale dither matrix compatibility data.",
+        " *",
+        " * This file is placed in the public domain.",
+        " */",
+        "",
+        "#ifndef AVFILTER_DITHER_MATRIX_H",
+        "#define AVFILTER_DITHER_MATRIX_H",
+        "",
+        "#include <stdint.h>",
+        "static const int ff_fruit_dither_size = 64;",
+        "static const uint16_t ff_fruit_dither_matrix[] = {",
+        *rows,
+        "};",
+        "",
+        "#endif /* AVFILTER_DITHER_MATRIX_H */",
+        "",
+    ]
+
+    patch_lines = [
+        "Index: FFmpeg/libavfilter/dither_matrix.h",
+        "===================================================================",
+        "--- /dev/null",
+        "+++ FFmpeg/libavfilter/dither_matrix.h",
+        f"@@ -0,0 +1,{len(header)} @@",
+        *["+" + line for line in header],
+    ]
+    dither_patch.write_text("\n".join(patch_lines) + "\n")
+
+    print(f"PASS: generated {dither_patch.name} with 4096 deterministic dither values")
     return 0
 
 

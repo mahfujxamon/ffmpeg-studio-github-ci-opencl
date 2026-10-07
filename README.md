@@ -65,3 +65,12 @@ failure.
 The final AAR verification now checks the complete FFmpeg n8.1.3 OpenCL filter
 family plus `scale_opencl`, rather than only the editor's nine most-used
 filters.
+### FFmpeg n8.1.3 OpenCL scale compatibility
+
+The native FFmpeg build targets the FFmpeg `n8.1.3` source used by this FFmpegKit
+release. `scale_opencl` is supplied through a pinned maintained 8.x backport.
+The backport also expects an internal `libavfilter/dither_matrix.h` that is not
+present in stock n8.1.3, so CI generates and applies a deterministic compatibility
+header as a second patch. The OpenCL headers are compiled with
+`CL_TARGET_OPENCL_VERSION=120` to avoid an implicit OpenCL 3.1 header default.
+
