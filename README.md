@@ -43,3 +43,11 @@ The native engine now applies the OpenCL device options both during command prep
 The OpenCL hardware-filter smoke test can end with FFmpeg return code 0 and no
 output path because it writes to the null muxer. The UI now reports that as
 success rather than `Execution failed with return code 0`.
+
+### v10-5 OpenCL filter completeness
+
+FFmpegKit `v8.1.9-lts-android` already carries the normal FFmpeg OpenCL filter family used by the editor (`overlay_opencl`, `unsharp_opencl`, `avgblur_opencl`, `convolution_opencl`, `nlmeans_opencl`, `deshake_opencl`, `tonemap_opencl`, `pad_opencl`, and others). The important exception is `scale_opencl`: the FFmpeg 8.x upstream source used by this build does not register that filter.
+
+The CI build therefore installs a pinned, maintained FFmpeg 8.x `scale_opencl` backport before the FFmpeg source build. The patch is integrity-checked by its Git blob SHA-1 and the final AAR is inspected to ensure all nine editor-required OpenCL filters are present in `libavfilter.so`. This makes a missing filter an explicit CI failure instead of a runtime `No such filter` surprise.
+
+The backport does not bundle any GPU vendor OpenCL implementation; the Android device's OpenCL driver remains responsible for actual hardware execution.

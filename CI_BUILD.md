@@ -25,3 +25,11 @@ The app currently uses the GPL FFmpegKit variant. Keep that only if the licensin
 The app initializes `OCL_ICD_FILENAMES` before the first FFmpegKit native call. It scans standard Android Khronos ICD registration directories for `.icd` files and passes the referenced implementation libraries to the official Khronos loader. No Samsung/Mali vendor OpenCL binary is packaged. The app also runs a small FFmpeg-backed OpenCL device initialization probe so the UI can distinguish “configured” from “actually usable”.
 
 The runtime probe only verifies OpenCL device initialization. It does not claim that every OpenCL filter or every vendor driver is bug-free.
+
+## OpenCL filter completeness
+
+The FFmpegKit 8.1.9 LTS source does not include `scale_opencl` even though the other OpenCL filters are present. The workflow installs the pinned FFmpeg 8.x backport from SynoCommunity's FFmpeg 8 patch set, verifies the downloaded patch by Git blob SHA-1, and then relies on FFmpegKit's normal `patches/ffmpeg` mechanism to apply it.
+
+After the AAR is generated, CI extracts `libavfilter.so` and requires these filters to be present:
+
+`scale_opencl overlay_opencl unsharp_opencl avgblur_opencl convolution_opencl nlmeans_opencl deshake_opencl tonemap_opencl pad_opencl`

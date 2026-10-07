@@ -17,6 +17,12 @@ env:
   OPENCL_HEADERS_TAG: v2026.05.29
   OPENCL_LOADER_TAG: v2026.05.29
 
+  # FFmpeg 8.x does not ship scale_opencl upstream. This pinned maintained
+  # backport adds the filter and its OpenCL kernels.
+  OPENCL_SCALE_PATCH_REF: 7fe3ec82a0c4f7ad0ed8c8f52359c2b579f3e28c
+  OPENCL_SCALE_PATCH_BLOB_SHA1: ae6b34d9e0753a0c4c33ab8882cd01f25eff7526
+  OPENCL_SCALE_PATCH_URL: https://raw.githubusercontent.com/SynoCommunity/spksrc/7fe3ec82a0c4f7ad0ed8c8f52359c2b579f3e28c/cross/ffmpeg8/patches/1006-jellyfin-0006-add-opencl-scaler-and-pixfmt-converter-impl.patch
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -212,6 +218,65 @@ jobs:
 
           echo "=== FFmpegKit tag ==="
           git -C ffmpegkit describe --tags --always
+
+
+      # ============================================================
+      # 8.5. Add maintained FFmpeg 8.x scale_opencl backport
+      #
+      # FFmpegKit v8.1.9 LTS follows FFmpeg 8.x, whose upstream filter set
+      # contains the other OpenCL filters but does not contain scale_opencl.
+      # Install the maintained FFmpeg 8.x backport as a normal FFmpegKit
+      # patch so the native FFmpeg source build, not the Android app, owns
+      # the filter implementation.
+      # ============================================================
+      - name: Add FFmpeg 8.x scale_opencl backport
+        run: |
+          set -euxo pipefail
+
+          PATCH_DIR="${GITHUB_WORKSPACE}/ffmpegkit/android-8.1-lts/patches/ffmpeg"
+          PATCH_FILE="${PATCH_DIR}/0006-add-opencl-scaler-and-pixfmt-converter-impl.patch"
+
+          mkdir -p "$PATCH_DIR"
+
+          curl -fsSL \
+            "${OPENCL_SCALE_PATCH_URL}" \
+            -o "$PATCH_FILE"
+
+          test -s "$PATCH_FILE"
+
+          echo "========================================"
+          echo "OPENCL SCALE PATCH"
+          echo "========================================"
+          echo "Ref : ${OPENCL_SCALE_PATCH_REF}"
+          echo "URL : ${OPENCL_SCALE_PATCH_URL}"
+          echo "Git blob SHA-1 expected: ${OPENCL_SCALE_PATCH_BLOB_SHA1}"
+
+          python3 - "$PATCH_FILE" "${OPENCL_SCALE_PATCH_BLOB_SHA1}" <<'PY'
+          from pathlib import Path
+          import hashlib
+          import sys
+
+          path = Path(sys.argv[1])
+          expected = sys.argv[2]
+          data = path.read_bytes()
+          header = f"blob {len(data)}\0".encode()
+          actual = hashlib.sha1(header + data).hexdigest()
+
+          print(f"downloaded bytes : {len(data)}")
+          print(f"git blob sha-1   : {actual}")
+
+          if actual != expected:
+              raise SystemExit(
+                  f"ERROR: OpenCL scale patch integrity mismatch: {actual} != {expected}"
+              )
+          PY
+
+          grep -F 'CONFIG_SCALE_OPENCL_FILTER' "$PATCH_FILE"
+          grep -F 'vf_scale_opencl.c' "$PATCH_FILE"
+          grep -F 'opencl/scale.cl' "$PATCH_FILE"
+
+          echo
+          echo "FFmpeg 8.x scale_opencl backport installed and integrity-verified."
 
 
       # ============================================================
@@ -994,10 +1059,10 @@ jobs:
           echo "===== OpenCL references ====="
 
           grep -n -i \
-            'opencl' \
+            -E 'opencl|scale_opencl' \
             build.log \
             2>/dev/null \
-            | tail -300 \
+            | tail -400 \
             || true
 
           echo
@@ -1147,6 +1212,24 @@ jobs:
 
           echo
           echo "Native .so count: $SO_COUNT"
+
+
+      # ============================================================
+      # 21.5. Verify required OpenCL filters in final libavfilter.so
+      #
+      # This is intentionally an artifact-level check. A successful native
+      # compile is not enough: the final AAR must actually register the
+      # filters the editor expects.
+      # ============================================================
+      - name: Verify final OpenCL filter inventory
+        run: |
+          set -euxo pipefail
+
+          SO="/tmp/aar-check/jni/arm64-v8a/libavfilter.so"
+          test -f "$SO"
+
+          chmod +x scripts/verify-required-opencl-filters.sh
+          scripts/verify-required-opencl-filters.sh "$SO"
 
 
       # ============================================================
