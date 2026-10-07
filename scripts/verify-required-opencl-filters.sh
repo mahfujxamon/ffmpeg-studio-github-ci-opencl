@@ -9,19 +9,35 @@ fi
 SO="$1"
 test -f "$SO"
 
+# FFmpeg n8.1.3's OpenCL family plus the maintained scale_opencl backport.
 required=(
-  scale_opencl
-  overlay_opencl
-  unsharp_opencl
   avgblur_opencl
+  boxblur_opencl
+  colorkey_opencl
   convolution_opencl
-  nlmeans_opencl
   deshake_opencl
-  tonemap_opencl
+  dilation_opencl
+  erosion_opencl
+  nlmeans_opencl
+  overlay_opencl
   pad_opencl
+  prewitt_opencl
+  program_opencl
+  remap_opencl
+  roberts_opencl
+  scale_opencl
+  sobel_opencl
+  tonemap_opencl
+  transpose_opencl
+  unsharp_opencl
+  xfade_opencl
 )
 
-mapfile -t filters < <(strings -a "$SO" | grep -E '^[A-Za-z0-9_]+_opencl$' | sort -u)
+mapfile -t filters < <(
+  strings -a "$SO" \
+    | grep -E '^[A-Za-z0-9_]+_opencl$' \
+    | sort -u
+)
 
 echo "OpenCL filters in $(basename "$SO"):"
 printf '  %s\n' "${filters[@]}"

@@ -51,3 +51,17 @@ FFmpegKit `v8.1.9-lts-android` already carries the normal FFmpeg OpenCL filter f
 The CI build therefore installs a pinned, maintained FFmpeg 8.x `scale_opencl` backport before the FFmpeg source build. The patch is integrity-checked by its Git blob SHA-1 and the final AAR is inspected to ensure all nine editor-required OpenCL filters are present in `libavfilter.so`. This makes a missing filter an explicit CI failure instead of a runtime `No such filter` surprise.
 
 The backport does not bundle any GPU vendor OpenCL implementation; the Android device's OpenCL driver remains responsible for actual hardware execution.
+
+### v10-6 FFmpeg n8.1.3 scale_opencl patch compatibility
+
+The FFmpegKit Android build downloads FFmpeg source `n8.1.3`. The maintained
+FFmpeg 8.x `scale_opencl` backport was authored against an earlier 8.x Makefile
+and therefore no longer applied cleanly because n8.1.3 adds `scale_filters.o`
+to the CUDA scaler object list. CI now verifies the upstream patch blob first,
+then deterministically adapts only that Makefile context before FFmpegKit's
+normal patch application stage. Any unexpected patch layout is a hard build
+failure.
+
+The final AAR verification now checks the complete FFmpeg n8.1.3 OpenCL filter
+family plus `scale_opencl`, rather than only the editor's nine most-used
+filters.
