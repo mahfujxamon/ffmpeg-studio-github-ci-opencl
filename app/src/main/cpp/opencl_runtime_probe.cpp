@@ -188,6 +188,19 @@ static std::vector<std::string> directProviderCandidates() {
         add("/vendor/lib/libPVROCL.so");
         add("/odm/lib/libPVROCL.so");
     }
+
+    // Some Android devices expose the vendor implementation only through
+    // linker-resolved generic SONAMEs. Check these last so concrete absolute
+    // vendor paths win. A real Khronos ICD/loader is filtered by the
+    // clIcdGetPlatformIDsKHR symbol test before direct mode is selected.
+    add("libOpenCL.so");
+    add("libOpenCL.so.1");
+    add("libGLES_mali.so");
+    add("libmali.so");
+    add("libPVROCL.so");
+    add("libOpenCL-pixel.so");
+    add("libOpenCL-car.so");
+
     return out;
 }
 
