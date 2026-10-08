@@ -377,7 +377,7 @@ extern void *ffmpegkit_direct_get_proc(const char *functionName);
         r'cl_uint\s+num_entries\s*,\s*'
         r'cl_platform_id\s*\*\s*platforms\s*,\s*'
         r'cl_uint\s*\*\s*num_platforms\s*\)'
-        r'(?P<suffix>[^\{;]*?)\{\s*'
+        r')(?P<suffix>[^\{;]*?)\{\s*'
     )
     platform_insert = '''#if defined(__ANDROID__)
     /* FFMPEGKIT_DIRECT_LOADER_ENTRYPOINTS: clGetPlatformIDs is special in the
@@ -405,7 +405,7 @@ extern void *ffmpegkit_direct_get_proc(const char *functionName);
         r'(?P<head>clGetExtensionFunctionAddressForPlatform\s*\(\s*'
         r'cl_platform_id\s+platform\s*,\s*'
         r'const\s+char\s*\*\s*function_name\s*\)'
-        r'(?P<suffix>[^\{;]*?)\{\s*'
+        r')(?P<suffix>[^\{;]*?)\{\s*'
     )
     ext_insert = '''#if defined(__ANDROID__)
     /*
