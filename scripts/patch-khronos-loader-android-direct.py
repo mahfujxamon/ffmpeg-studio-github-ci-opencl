@@ -360,7 +360,7 @@ def patch_loader_entrypoints(path: Path) -> None:
         print(f"PASS: loader entry points already patched: {path}")
         return
 
-    include_anchor = '#include <string.h>\\n'
+    include_anchor = '#include <string.h>\n'
     include_block = '''#include <string.h>
 #if defined(__ANDROID__)
 /* Implemented in icd.c by the Android direct-provider bridge. */
