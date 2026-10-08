@@ -263,7 +263,7 @@ def patch_generated_dispatch(path: Path) -> None:
 
     # The generated dispatcher includes icd.h/icd_dispatch.h but the helper
     # functions live in icd.c. Add explicit declarations before any hook calls.
-    include_anchor = '#include "icd_dispatch.h"\\n'
+    include_anchor = '#include "icd_dispatch.h"\n'
     include_block = '''#include "icd_dispatch.h"
 
 #if defined(__ANDROID__)
@@ -286,7 +286,7 @@ extern void *ffmpegkit_direct_get_proc(const char *functionName);
             missing = "return;"
             invoke = (
                 f"        ((__typeof__(&{f['name']}))ffmpegkit_direct_cached)"
-                f"({f['args']});\\n"
+                f"({f['args']});\n"
                 "        return;"
             )
         else:
