@@ -58,11 +58,11 @@ static void ffmpegkitDirectProbeOnce(void)
      * Keep OCL_ICD_FILENAMES as a compatibility fallback for older app builds.
      */
     char *filenames =
-        khrIcd_secure_getenv("FFMPEGKIT_OPENCL_DIRECT_LIBRARY");
+        khrIcd_getenv("FFMPEGKIT_OPENCL_DIRECT_LIBRARY");
     char *cursor;
 
     if (!filenames)
-        filenames = khrIcd_secure_getenv("OCL_ICD_FILENAMES");
+        filenames = khrIcd_getenv("OCL_ICD_FILENAMES");
 
     if (!filenames)
         return;
