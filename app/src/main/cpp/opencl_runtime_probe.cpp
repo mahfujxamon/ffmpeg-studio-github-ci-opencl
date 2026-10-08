@@ -273,10 +273,47 @@ static std::string configureKhronosLoader() {
         return report.str();
     }
 
-    // Do not force a non-ICD OpenCL implementation into the Khronos loader.
-    // Such a library may export clGetPlatformIDs() and work when used directly,
-    // but the Khronos loader requires cl_khr_icd and clIcdGetPlatformIDsKHR.
-    return "no ICD-compatible OpenCL provider found; leaving existing loader discovery unchanged";
+    // Android vendor OpenCL implementations are often valid OpenCL providers
+    // without Khronos ICD entry points. The native probe above has already shown
+    // that such a library can enumerate a real GPU platform. The patched static
+    // Khronos loader can accept this legacy/direct form, so select it explicitly.
+    // Prefer absolute vendor paths first: a generic libOpenCL.so may itself be
+    // the Khronos loader and therefore only report CL_PLATFORM_NOT_FOUND_KHR.
+    std::vector<std::string> directCandidates;
+    auto addDirect = [&](const char* value) {
+        if (!value || !*value) return;
+        for (const auto& existing : directCandidates) {
+            if (existing == value) return;
+        }
+        directCandidates.emplace_back(value);
+    };
+    const bool is64 = sizeof(void*) == 8;
+    if (is64) {
+        addDirect("/system/vendor/lib64/libOpenCL.so");
+        addDirect("/vendor/lib64/libOpenCL.so");
+        addDirect("/odm/lib64/libOpenCL.so");
+        addDirect("/product/lib64/libOpenCL.so");
+    } else {
+        addDirect("/system/vendor/lib/libOpenCL.so");
+        addDirect("/vendor/lib/libOpenCL.so");
+        addDirect("/odm/lib/libOpenCL.so");
+        addDirect("/product/lib/libOpenCL.so");
+    }
+    for (const auto& path : candidates()) addDirect(path.c_str());
+
+    for (const auto& path : directCandidates) {
+        if (!hasUsablePlatform(path)) continue;
+        if (setenv("OCL_ICD_FILENAMES", path.c_str(), 1) != 0) {
+            return "usable Android direct OpenCL provider found at " + path +
+                   ", but setenv(OCL_ICD_FILENAMES) failed";
+        }
+        setenv("OCL_ICD_ENABLE_TRACE", "1", 1);
+        report << "configured Khronos loader OCL_ICD_FILENAMES=" << path
+               << " mode=android-direct-legacy";
+        return report.str();
+    }
+
+    return "no usable OpenCL provider found; leaving existing loader discovery unchanged";
 }
 
 extern "C" JNIEXPORT jstring JNICALL
