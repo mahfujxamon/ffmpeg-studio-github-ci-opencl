@@ -356,6 +356,20 @@ jobs:
 
 
       # ============================================================
+      # 10.5. Patch Khronos loader for Android direct OpenCL providers
+      # ============================================================
+      - name: Patch Khronos loader for Android direct OpenCL providers
+        run: |
+          set -euxo pipefail
+          chmod +x scripts/patch-khronos-loader-android-direct.py
+          python3 scripts/patch-khronos-loader-android-direct.py \
+            icd-loader/loader/icd.c
+          grep -n \
+            "ffmpegkit_legacy_direct\|accepting Android direct OpenCL" \
+            icd-loader/loader/icd.c
+
+
+      # ============================================================
       # 11. Build official Khronos ICD loader as STATIC PIC
       #
       # IMPORTANT:
