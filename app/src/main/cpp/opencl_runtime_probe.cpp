@@ -212,16 +212,19 @@ static std::string configureKhronosLoader() {
     }
 
     // Android direct provider fallback. Narzo/MediaTek Mali exposes ordinary
-    // clGetPlatformIDs but no clIcdGetPlatformIDsKHR. Select by symbols only;
-    // FFmpeg performs the real GPU capability check afterward.
+    // clGetPlatformIDs but no clIcdGetPlatformIDsKHR. Do NOT expose this path
+    // through OCL_ICD_FILENAMES: it is not a Khronos ICD. Give the direct
+    // dispatch bridge its own process-local provider variable. FFmpeg performs
+    // the real GPU capability check afterward.
     for (const auto& path : directProviderCandidates()) {
         bool isIcd = false;
         if (!inspectIcdProvider(path, &isIcd) || isIcd) continue;
-        if (setenv("OCL_ICD_FILENAMES", path.c_str(), 1) != 0) {
-            return "Android direct OpenCL provider detected at " + path + " but setenv failed";
+        if (setenv("FFMPEGKIT_OPENCL_DIRECT_LIBRARY", path.c_str(), 1) != 0) {
+            return "Android direct OpenCL provider detected at " + path + " but setenv(FFMPEGKIT_OPENCL_DIRECT_LIBRARY) failed";
         }
         setenv("OCL_ICD_ENABLE_TRACE", "1", 1);
-        report << "configured Khronos loader OCL_ICD_FILENAMES=" << path
+        report << "configured Android direct OpenCL provider "
+               << "FFMPEGKIT_OPENCL_DIRECT_LIBRARY=" << path
                << " mode=android-direct-symbol";
         return report.str();
     }
