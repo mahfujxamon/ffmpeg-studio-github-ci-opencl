@@ -352,21 +352,98 @@ extern void *ffmpegkit_direct_get_proc(const char *functionName);
         f"PASS: patched {patched_count} Android direct-provider dispatch hooks into {path}"
     )
 
-def main() -> None:
-    if len(sys.argv) != 3:
+
+def patch_loader_entrypoints(path: Path) -> None:
+    text = path.read_text()
+    marker = "FFMPEGKIT_DIRECT_LOADER_ENTRYPOINTS"
+    if marker in text:
+        print(f"PASS: loader entry points already patched: {path}")
+        return
+
+    include_anchor = '#include <string.h>\\n'
+    include_block = '''#include <string.h>
+#if defined(__ANDROID__)
+/* Implemented in icd.c by the Android direct-provider bridge. */
+extern int ffmpegkit_direct_provider_active(void);
+extern void *ffmpegkit_direct_get_proc(const char *functionName);
+#endif
+'''
+    if include_anchor not in text:
+        raise SystemExit("ERROR: icd_dispatch.c string.h include anchor not found")
+    text = text.replace(include_anchor, include_block, 1)
+
+    platform_anchor = '''clGetPlatformIDs(cl_uint num_entries,
+    cl_platform_id * platforms,
+    cl_uint * num_platforms) CL_API_SUFFIX__VERSION_1_0
+{
+'''
+    platform_insert = '''#if defined(__ANDROID__)
+    /* FFMPEGKIT_DIRECT_LOADER_ENTRYPOINTS: clGetPlatformIDs is special in the
+     * Khronos loader and is not generated in icd_dispatch_generated.c. */
+    if (ffmpegkit_direct_provider_active()) {
+        typedef cl_int (CL_API_CALL *FFmpegKitClGetPlatformIDs)(
+            cl_uint, cl_platform_id *, cl_uint *);
+        FFmpegKitClGetPlatformIDs fn =
+            (FFmpegKitClGetPlatformIDs)ffmpegkit_direct_get_proc(
+                "clGetPlatformIDs");
+        if (fn)
+            return fn(num_entries, platforms, num_platforms);
+    }
+#endif
+'''
+    if platform_anchor not in text:
+        raise SystemExit("ERROR: clGetPlatformIDs anchor not found in icd_dispatch.c")
+    text = text.replace(platform_anchor, platform_anchor + platform_insert, 1)
+
+    ext_anchor = '''clGetExtensionFunctionAddressForPlatform(cl_platform_id platform,
+    const char * function_name) CL_API_SUFFIX__VERSION_1_2
+{
+'''
+    ext_insert = '''#if defined(__ANDROID__)
+    /*
+     * Direct Android providers may export this normally even without the
+     * Khronos ICD ABI. Bypass loader handle validation in direct mode.
+     */
+    if (ffmpegkit_direct_provider_active()) {
+        typedef void *(CL_API_CALL *FFmpegKitClGetExtensionFunctionAddressForPlatform)(
+            cl_platform_id, const char *);
+        FFmpegKitClGetExtensionFunctionAddressForPlatform fn =
+            (FFmpegKitClGetExtensionFunctionAddressForPlatform)
+                ffmpegkit_direct_get_proc(
+                    "clGetExtensionFunctionAddressForPlatform");
+        if (fn)
+            return fn(platform, function_name);
+    }
+#endif
+'''
+    if ext_anchor not in text:
         raise SystemExit(
-            "usage: patch-khronos-loader-android-direct.py <icd.c> <icd_dispatch_generated.c>"
+            "ERROR: clGetExtensionFunctionAddressForPlatform anchor not found in icd_dispatch.c"
+        )
+    text = text.replace(ext_anchor, ext_anchor + ext_insert, 1)
+
+    path.write_text(text)
+    print(f"PASS: patched direct Android loader entry points into {path}")
+
+def main() -> None:
+    if len(sys.argv) != 4:
+        raise SystemExit(
+            "usage: patch-khronos-loader-android-direct.py <icd.c> <icd_dispatch_generated.c> <icd_dispatch.c>"
         )
 
     icd = Path(sys.argv[1])
     generated = Path(sys.argv[2])
+    loader_dispatch = Path(sys.argv[3])
 
     if not icd.is_file():
         raise SystemExit(f"ERROR: missing loader source: {icd}")
     if not generated.is_file():
         raise SystemExit(f"ERROR: missing generated dispatch source: {generated}")
+    if not loader_dispatch.is_file():
+        raise SystemExit(f"ERROR: missing loader dispatch source: {loader_dispatch}")
 
     patch_icd(icd)
+    patch_loader_entrypoints(loader_dispatch)
     patch_generated_dispatch(generated)
 
 
