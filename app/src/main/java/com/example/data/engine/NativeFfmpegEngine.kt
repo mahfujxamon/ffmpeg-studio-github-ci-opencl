@@ -307,7 +307,7 @@ class NativeFfmpegEngine : ExecutionEngine {
                 )
             } catch (_: java.util.concurrent.TimeoutException) {
                 nativeProbeTimedOut = true
-                "native probe timed out after ${nativeProbeTimeoutMs}ms; clGetPlatformIDs() did not return"
+                "native provider discovery timed out after ${nativeProbeTimeoutMs}ms"
             } catch (t: Throwable) {
                 "native probe wait exception: ${buildDetailedErrorChain(t)}"
             }
@@ -345,7 +345,7 @@ class NativeFfmpegEngine : ExecutionEngine {
                     append(" Probe=native OpenCL capability probe timed out after ")
                     append(nativeProbeTimeoutMs)
                     append("ms and was abandoned on its daemon worker. ")
-                    append("The device OpenCL loader did not return from native enumeration.")
+                    append("Provider discovery did not return; FFmpeg smoke test was not started.")
                 }
                 complete(OpenClRuntime.ProbeResult(false, detail))
                 return@Thread
