@@ -372,11 +372,13 @@ extern void *ffmpegkit_direct_get_proc(const char *functionName);
         raise SystemExit("ERROR: icd_dispatch.c string.h include anchor not found")
     text = text.replace(include_anchor, include_block, 1)
 
-    platform_anchor = '''clGetPlatformIDs(cl_uint num_entries,
-    cl_platform_id* platforms,
-    cl_uint* num_platforms)
-{
-'''
+    platform_re = re.compile(
+        r'(?P<head>clGetPlatformIDs\\s*\\(\\s*'
+        r'cl_uint\\s+num_entries\\s*,\\s*'
+        r'cl_platform_id\\s*\\*\\s*platforms\\s*,\\s*'
+        r'cl_uint\\s*\\*\\s*num_platforms\\s*\\)'
+        r'(?P<suffix>[^\\{;]*?)\\{\\s*'
+    )
     platform_insert = '''#if defined(__ANDROID__)
     /* FFMPEGKIT_DIRECT_LOADER_ENTRYPOINTS: clGetPlatformIDs is special in the
      * Khronos loader and is not generated in icd_dispatch_generated.c. */
@@ -391,14 +393,20 @@ extern void *ffmpegkit_direct_get_proc(const char *functionName);
     }
 #endif
 '''
-    if platform_anchor not in text:
-        raise SystemExit("ERROR: clGetPlatformIDs anchor not found in icd_dispatch.c")
-    text = text.replace(platform_anchor, platform_anchor + platform_insert, 1)
+    text, n = platform_re.subn(
+        lambda m: m.group(0) + platform_insert,
+        text,
+        count=1,
+    )
+    if n != 1:
+        raise SystemExit("ERROR: clGetPlatformIDs signature not found in icd_dispatch.c")
 
-    ext_anchor = '''clGetExtensionFunctionAddressForPlatform(cl_platform_id platform,
-    const char* function_name)
-{
-'''
+    ext_re = re.compile(
+        r'(?P<head>clGetExtensionFunctionAddressForPlatform\\s*\\(\\s*'
+        r'cl_platform_id\\s+platform\\s*,\\s*'
+        r'const\\s+char\\s*\\*\\s*function_name\\s*\\)'
+        r'(?P<suffix>[^\\{;]*?)\\{\\s*'
+    )
     ext_insert = '''#if defined(__ANDROID__)
     /*
      * Direct Android providers may export this normally even without the
@@ -416,11 +424,15 @@ extern void *ffmpegkit_direct_get_proc(const char *functionName);
     }
 #endif
 '''
-    if ext_anchor not in text:
+    text, n = ext_re.subn(
+        lambda m: m.group(0) + ext_insert,
+        text,
+        count=1,
+    )
+    if n != 1:
         raise SystemExit(
-            "ERROR: clGetExtensionFunctionAddressForPlatform anchor not found in icd_dispatch.c"
+            "ERROR: clGetExtensionFunctionAddressForPlatform signature not found in icd_dispatch.c"
         )
-    text = text.replace(ext_anchor, ext_anchor + ext_insert, 1)
 
     path.write_text(text)
     print(f"PASS: patched direct Android loader entry points into {path}")
