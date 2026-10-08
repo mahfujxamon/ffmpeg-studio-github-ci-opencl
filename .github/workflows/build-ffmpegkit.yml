@@ -362,11 +362,28 @@ jobs:
         run: |
           set -euxo pipefail
           chmod +x scripts/patch-khronos-loader-android-direct.py
+
+          # Legacy Android OpenCL providers must NOT impersonate a Khronos ICD.
+          # Patch the loader with a direct-provider bridge and hook all generated
+          # OpenCL API entry points so calls reach the vendor library directly.
           python3 scripts/patch-khronos-loader-android-direct.py \
-            icd-loader/loader/icd.c
+            icd-loader/loader/icd.c \
+            icd-loader/loader/icd_dispatch_generated.c \
+            icd-loader/loader/icd_dispatch.c
+
           grep -n \
-            "ffmpegkit_legacy_direct\|accepting Android direct OpenCL" \
+            "ffmpegkit_direct_provider_active" \
             icd-loader/loader/icd.c
+
+          grep -n \
+            "FFMPEGKIT_DIRECT_LOADER_ENTRYPOINTS" \
+            icd-loader/loader/icd_dispatch.c
+
+          test "$(
+            grep -c \
+              "FFmpegKit Android direct-provider dispatch" \
+              icd-loader/loader/icd_dispatch_generated.c
+          )" -ge 100
 
 
       # ============================================================
