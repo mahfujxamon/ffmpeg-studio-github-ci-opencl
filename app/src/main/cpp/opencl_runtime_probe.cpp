@@ -19,6 +19,7 @@ using cl_device_id = void*;
 
 using ClGetPlatformIDs = cl_int (*)(cl_uint, cl_platform_id*, cl_uint*);
 using ClGetPlatformInfo = cl_int (*)(cl_platform_id, cl_uint, size_t, void*, size_t*);
+using ClGetExtensionFunctionAddress = void* (*)(const char*);
 using ClGetDeviceIDs = cl_int (*)(cl_platform_id, uint64_t, cl_uint, cl_device_id*, cl_uint*);
 using ClGetDeviceInfo = cl_int (*)(cl_device_id, uint32_t, size_t, void*, size_t*);
 using ClIcdGetPlatformIDsKHR = cl_int (*)(cl_uint, cl_platform_id*, cl_uint*);
@@ -55,34 +56,66 @@ static std::string getDeviceInfoString(ClGetDeviceInfo fn, cl_device_id d, uint3
 }
 
 static std::vector<std::string> candidates() {
-    return {
-        "libOpenCL.so",
-        "libOpenCL.so.1",
-        "libOpenCL-pixel.so",
-        "libOpenCL-car.so",
-        "libGLES_mali.so",
-        "libmali.so",
-        "libPVROCL.so",
-        "/vendor/lib64/libOpenCL.so",
-        "/system/vendor/lib64/libOpenCL.so",
-        "/odm/lib64/libOpenCL.so",
-        "/vendor/lib64/egl/libGLES_mali.so",
-        "/system/vendor/lib64/egl/libGLES_mali.so",
-        "/system/lib64/egl/libGLES_mali.so",
-        "/odm/lib64/egl/libGLES_mali.so",
-        "/vendor/lib64/libGLES_mali.so",
-        "/system/vendor/lib64/libGLES_mali.so",
-        "/system/lib64/libGLES_mali.so",
-        "/odm/lib64/libGLES_mali.so",
-        "/vendor/lib64/libmali.so",
-        "/system/vendor/lib64/libmali.so",
-        "/system/lib64/libmali.so",
-        "/odm/lib64/libmali.so",
-        "/vendor/lib64/libPVROCL.so",
-        "/system/vendor/lib64/libPVROCL.so",
-        "/system/lib64/libPVROCL.so",
-        "/odm/lib64/libPVROCL.so"
+    // Android application processes are ABI-specific. A 64-bit process cannot
+    // load a 32-bit vendor OpenCL implementation and vice versa. Keep both
+    // name- and path-based candidates, but order the active process ABI first.
+    const bool is64 = sizeof(void*) == 8;
+    std::vector<std::string> out;
+
+    auto add = [&](const char* value) {
+        if (!value || !*value) return;
+        for (const auto& existing : out) {
+            if (existing == value) return;
+        }
+        out.emplace_back(value);
     };
+
+    // Generic SONAME first: Android's linker namespace may resolve the public
+    // vendor library by name even when an absolute /vendor path is rejected.
+    add("libOpenCL.so");
+    add("libOpenCL.so.1");
+    add("libOpenCL-pixel.so");
+    add("libOpenCL-car.so");
+
+    if (is64) {
+        add("/vendor/lib64/libOpenCL.so");
+        add("/system/vendor/lib64/libOpenCL.so");
+        add("/odm/lib64/libOpenCL.so");
+        add("/product/lib64/libOpenCL.so");
+        add("/vendor/lib64/egl/libGLES_mali.so");
+        add("/system/vendor/lib64/egl/libGLES_mali.so");
+        add("/odm/lib64/egl/libGLES_mali.so");
+        add("/vendor/lib64/libGLES_mali.so");
+        add("/system/vendor/lib64/libGLES_mali.so");
+        add("/odm/lib64/libGLES_mali.so");
+        add("/vendor/lib64/libmali.so");
+        add("/system/vendor/lib64/libmali.so");
+        add("/odm/lib64/libmali.so");
+        add("/vendor/lib64/libPVROCL.so");
+        add("/system/vendor/lib64/libPVROCL.so");
+        add("/odm/lib64/libPVROCL.so");
+    } else {
+        add("/vendor/lib/libOpenCL.so");
+        add("/system/vendor/lib/libOpenCL.so");
+        add("/odm/lib/libOpenCL.so");
+        add("/product/lib/libOpenCL.so");
+        add("/vendor/lib/egl/libGLES_mali.so");
+        add("/system/vendor/lib/egl/libGLES_mali.so");
+        add("/odm/lib/egl/libGLES_mali.so");
+        add("/vendor/lib/libGLES_mali.so");
+        add("/system/vendor/lib/libGLES_mali.so");
+        add("/odm/lib/libGLES_mali.so");
+        add("/vendor/lib/libmali.so");
+        add("/system/vendor/lib/libmali.so");
+        add("/odm/lib/libmali.so");
+        add("/vendor/lib/libPVROCL.so");
+        add("/system/vendor/lib/libPVROCL.so");
+        add("/odm/lib/libPVROCL.so");
+    }
+
+    // Some OEMs expose a generic libOpenCL name only through the linker; the
+    // Android app manifest already declares these as optional native libraries.
+    return out;
 }
 
 static std::string runProbe() {
@@ -103,7 +136,18 @@ static std::string runProbe() {
         dlerror();
         auto getPlatforms = reinterpret_cast<ClGetPlatformIDs>(dlsym(h, "clGetPlatformIDs"));
         const char* symErr = dlerror();
-        auto icdGetPlatforms = reinterpret_cast<ClIcdGetPlatformIDsKHR>(dlsym(h, "clIcdGetPlatformIDsKHR"));
+        auto getExtensionFunctionAddress =
+            reinterpret_cast<ClGetExtensionFunctionAddress>(
+                dlsym(h, "clGetExtensionFunctionAddress"));
+        auto icdGetPlatformsDirect = reinterpret_cast<ClIcdGetPlatformIDsKHR>(
+            dlsym(h, "clIcdGetPlatformIDsKHR"));
+        auto icdGetPlatformsViaExtension = getExtensionFunctionAddress
+            ? reinterpret_cast<ClIcdGetPlatformIDsKHR>(
+                getExtensionFunctionAddress("clIcdGetPlatformIDsKHR"))
+            : nullptr;
+        auto icdGetPlatforms = icdGetPlatformsDirect
+            ? icdGetPlatformsDirect
+            : icdGetPlatformsViaExtension;
         if (!getPlatforms || symErr) {
             report << path << " -> loaded, clGetPlatformIDs MISSING";
             if (symErr) report << " (" << symErr << ")";
@@ -115,7 +159,9 @@ static std::string runProbe() {
         cl_uint count = 0;
         cl_int rc = getPlatforms(0, nullptr, &count);
         report << path << " -> clGetPlatformIDs rc=" << rc << " platforms=" << count;
-        report << " icd_khr_symbol=" << (icdGetPlatforms ? "yes" : "no");
+        report << " icd_khr_symbol=" << (icdGetPlatforms ? "yes" : "no")
+               << " (direct=" << (icdGetPlatformsDirect ? "yes" : "no")
+               << ",ext=" << (icdGetPlatformsViaExtension ? "yes" : "no") << ")";
         if (icdGetPlatforms) {
             cl_uint icdCount = 0;
             cl_int icdRc = icdGetPlatforms(0, nullptr, &icdCount);
@@ -177,25 +223,60 @@ static bool hasUsablePlatform(const std::string& path) {
     return ok;
 }
 
-static std::string configureKhronosLoader() {
-    // The direct probe has already established that these are real, working
-    // device OpenCL implementations. Tell the Khronos ICD loader to use the
-    // first one that actually enumerates a platform. No vendor .so is bundled.
-    const std::vector<std::string> preferred = {
-        "/vendor/lib64/libOpenCL.so",
-        "/system/vendor/lib64/libOpenCL.so",
-        "libOpenCL.so"
-    };
+static bool hasIcdCompatiblePlatform(const std::string& path) {
+    dlerror();
+    void* h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!h) return false;
 
-    for (const auto& path : preferred) {
-        if (!hasUsablePlatform(path)) continue;
+    dlerror();
+    auto getExtensionFunctionAddress =
+        reinterpret_cast<ClGetExtensionFunctionAddress>(
+            dlsym(h, "clGetExtensionFunctionAddress"));
+
+    auto directIcd = reinterpret_cast<ClIcdGetPlatformIDsKHR>(
+        dlsym(h, "clIcdGetPlatformIDsKHR"));
+
+    ClIcdGetPlatformIDsKHR icd = directIcd;
+    if (!icd && getExtensionFunctionAddress) {
+        icd = reinterpret_cast<ClIcdGetPlatformIDsKHR>(
+            getExtensionFunctionAddress("clIcdGetPlatformIDsKHR"));
+    }
+
+    if (!icd) {
+        dlclose(h);
+        return false;
+    }
+
+    cl_uint count = 0;
+    const cl_int rc = icd(0, nullptr, &count);
+    const bool ok = (rc == CL_SUCCESS && count > 0);
+    dlclose(h);
+    return ok;
+}
+
+static std::string configureKhronosLoader() {
+    const auto paths = candidates();
+    std::ostringstream report;
+    int icdCompatible = 0;
+
+    for (const auto& path : paths) {
+        if (!hasIcdCompatiblePlatform(path)) continue;
+
         if (setenv("OCL_ICD_FILENAMES", path.c_str(), 1) != 0) {
-            return "usable OpenCL provider found at " + path + ", but setenv(OCL_ICD_FILENAMES) failed";
+            return "ICD-compatible OpenCL provider found at " + path +
+                   ", but setenv(OCL_ICD_FILENAMES) failed";
         }
         setenv("OCL_ICD_ENABLE_TRACE", "1", 1);
-        return "configured Khronos loader OCL_ICD_FILENAMES=" + path;
+        ++icdCompatible;
+        report << "configured Khronos loader OCL_ICD_FILENAMES=" << path
+               << " icd_compatible=" << icdCompatible;
+        return report.str();
     }
-    return "no usable OpenCL provider found for Khronos loader configuration";
+
+    // Do not force a non-ICD OpenCL implementation into the Khronos loader.
+    // Such a library may export clGetPlatformIDs() and work when used directly,
+    // but the Khronos loader requires cl_khr_icd and clIcdGetPlatformIDsKHR.
+    return "no ICD-compatible OpenCL provider found; leaving existing loader discovery unchanged";
 }
 
 extern "C" JNIEXPORT jstring JNICALL

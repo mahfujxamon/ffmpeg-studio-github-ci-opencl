@@ -203,6 +203,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // OpenCL capability probing is asynchronous on purpose. On slower OEM
+        // devices (notably some MediaTek/Realme builds) it can still be running
+        // when the user presses Render. Never start an OpenCL FFmpeg command with
+        // an unresolved probe; queue this render behind the in-flight probe.
+        if (nativeEngine.isOpenClRequested(rawCommand) && nativeEngine.currentOpenClProbe() == null) {
+            _terminalLogs.value = listOf(
+                "[OPENCL] Capability check is still running; waiting before GPU execution..."
+            )
+            emitMessage("OpenCL capability check is running. Render will start after the device check completes.")
+            nativeEngine.probeOpenClAsync { probe ->
+                if (probe.available) {
+                    startRender()
+                } else {
+                    val errMsg = "OpenCL is unavailable on this device. ${probe.detail.takeLast(600)}"
+                    _terminalLogs.value = listOf("[OPENCL PROBE] $errMsg")
+                    _nativeStatus.value = nativeEngine.checkNativeRuntime()
+                    emitMessage(errMsg)
+                }
+            }
+            return
+        }
+
         // Validation 3: Video must be selected if {input} macro is used
         val media = _probedMedia.value
         if (rawCommand.contains("{input}")) {

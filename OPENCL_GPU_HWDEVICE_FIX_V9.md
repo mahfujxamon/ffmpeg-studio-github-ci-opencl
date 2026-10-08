@@ -47,3 +47,16 @@ The native Android engine now treats the OpenCL device binding as part of comman
 `-init_hw_device opencl=ocl:0.0 -filter_hw_device ocl`
 
 when those options are missing. The same normalization is applied defensively immediately before `FFmpegKit.executeAsync()`. Existing OpenCL options are preserved without duplication, and ordinary filenames containing `opencl` are not considered OpenCL requests.
+
+
+## Cross-device vendor discovery (v11)
+
+The Android runtime path now performs direct native provider discovery before the FFmpeg OpenCL smoke test. It selects the first device-supplied OpenCL implementation that successfully enumerates a platform, using ABI-aware 64-bit/32-bit library names and vendor paths. Render execution waits for this asynchronous probe to finish, preventing slower MediaTek/Realme devices from starting an OpenCL command while the capability result is still unresolved.
+
+## v11 cross-device OpenCL runtime
+
+The native Android probe now verifies the OpenCL `cl_khr_icd` entry point through
+`clGetExtensionFunctionAddress` before setting `OCL_ICD_FILENAMES`. A library that
+only exposes direct `clGetPlatformIDs` is not forced into the Khronos ICD loader.
+The app also serializes the native + FFmpeg OpenCL capability check on a worker
+thread so an OpenCL render cannot start while the probe is unresolved.
