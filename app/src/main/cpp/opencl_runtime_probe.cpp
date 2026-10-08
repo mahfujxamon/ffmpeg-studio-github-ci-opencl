@@ -118,202 +118,115 @@ static std::vector<std::string> candidates() {
     return out;
 }
 
-static std::string runProbe() {
-    std::ostringstream report;
-    int usable = 0;
-
-    for (const auto& path : candidates()) {
-        dlerror();
-        void* h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
-        if (!h) {
-            const char* err = dlerror();
-            report << path << " -> dlopen FAIL";
-            if (err) report << " (" << err << ")";
-            report << "\n";
-            continue;
-        }
-
-        dlerror();
-        auto getPlatforms = reinterpret_cast<ClGetPlatformIDs>(dlsym(h, "clGetPlatformIDs"));
-        const char* symErr = dlerror();
-        auto getExtensionFunctionAddress =
-            reinterpret_cast<ClGetExtensionFunctionAddress>(
-                dlsym(h, "clGetExtensionFunctionAddress"));
-        auto icdGetPlatformsDirect = reinterpret_cast<ClIcdGetPlatformIDsKHR>(
-            dlsym(h, "clIcdGetPlatformIDsKHR"));
-        auto icdGetPlatformsViaExtension = getExtensionFunctionAddress
-            ? reinterpret_cast<ClIcdGetPlatformIDsKHR>(
-                getExtensionFunctionAddress("clIcdGetPlatformIDsKHR"))
-            : nullptr;
-        auto icdGetPlatforms = icdGetPlatformsDirect
-            ? icdGetPlatformsDirect
-            : icdGetPlatformsViaExtension;
-        if (!getPlatforms || symErr) {
-            report << path << " -> loaded, clGetPlatformIDs MISSING";
-            if (symErr) report << " (" << symErr << ")";
-            report << "\n";
-            dlclose(h);
-            continue;
-        }
-
-        cl_uint count = 0;
-        cl_int rc = getPlatforms(0, nullptr, &count);
-        report << path << " -> clGetPlatformIDs rc=" << rc << " platforms=" << count;
-        report << " icd_khr_symbol=" << (icdGetPlatforms ? "yes" : "no")
-               << " (direct=" << (icdGetPlatformsDirect ? "yes" : "no")
-               << ",ext=" << (icdGetPlatformsViaExtension ? "yes" : "no") << ")";
-        if (icdGetPlatforms) {
-            cl_uint icdCount = 0;
-            cl_int icdRc = icdGetPlatforms(0, nullptr, &icdCount);
-            report << " icd_khr_rc=" << icdRc << " icd_khr_platforms=" << icdCount;
-        }
-
-        if (rc == CL_SUCCESS && count > 0) {
-            std::vector<cl_platform_id> platforms(count);
-            rc = getPlatforms(count, platforms.data(), nullptr);
-            report << " enumerate_rc=" << rc;
-            if (rc == CL_SUCCESS) {
-                auto getPlatformInfo = reinterpret_cast<ClGetPlatformInfo>(dlsym(h, "clGetPlatformInfo"));
-                auto getDeviceIds = reinterpret_cast<ClGetDeviceIDs>(dlsym(h, "clGetDeviceIDs"));
-                auto getDeviceInfo = reinterpret_cast<ClGetDeviceInfo>(dlsym(h, "clGetDeviceInfo"));
-                for (cl_uint i = 0; i < count && i < 4; ++i) {
-                    if (getPlatformInfo) {
-                        report << " [platform=" << getInfoString(getPlatformInfo, platforms[i], CL_PLATFORM_NAME)
-                               << "; vendor=" << getInfoString(getPlatformInfo, platforms[i], CL_PLATFORM_VENDOR)
-                               << "; version=" << getInfoString(getPlatformInfo, platforms[i], CL_PLATFORM_VERSION) << "]";
-                    }
-                    if (getDeviceIds) {
-                        cl_uint dc = 0;
-                        cl_int drc = getDeviceIds(platforms[i], CL_DEVICE_TYPE_ALL, 0, nullptr, &dc);
-                        report << " devices_rc=" << drc << " devices=" << dc;
-                        if (drc == CL_SUCCESS && dc > 0) {
-                            std::vector<cl_device_id> devices(dc);
-                            drc = getDeviceIds(platforms[i], CL_DEVICE_TYPE_ALL, dc, devices.data(), nullptr);
-                            report << " device_enum_rc=" << drc;
-                            if (drc == CL_SUCCESS && getDeviceInfo) {
-                                report << " [device=" << getDeviceInfoString(getDeviceInfo, devices[0], CL_DEVICE_NAME)
-                                       << "; vendor=" << getDeviceInfoString(getDeviceInfo, devices[0], CL_DEVICE_VENDOR) << "]";
-                            }
-                        }
-                    }
-                }
-            }
-            ++usable;
-        }
-        report << "\n";
-        dlclose(h);
-    }
-
-    report << "SUMMARY usable_opencl_implementations=" << usable;
-    return report.str();
+static bool hasSymbol(void* handle, const char* symbol) {
+    if (!handle || !symbol || !*symbol) return false;
+    dlerror();
+    void* address = dlsym(handle, symbol);
+    const char* error = dlerror();
+    return address != nullptr && error == nullptr;
 }
 
-
-static bool hasUsablePlatform(const std::string& path) {
-    dlerror();
-    void* h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
-    if (!h) return false;
-    dlerror();
-    auto getPlatforms = reinterpret_cast<ClGetPlatformIDs>(dlsym(h, "clGetPlatformIDs"));
-    if (!getPlatforms) { dlclose(h); return false; }
-    cl_uint count = 0;
-    cl_int rc = getPlatforms(0, nullptr, &count);
-    bool ok = (rc == CL_SUCCESS && count > 0);
-    dlclose(h);
-    return ok;
-}
-
-static bool hasIcdCompatiblePlatform(const std::string& path) {
+static bool inspectIcdProvider(const std::string& path, bool* isIcd) {
+    if (isIcd) *isIcd = false;
     dlerror();
     void* h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!h) return false;
 
-    dlerror();
-    auto getExtensionFunctionAddress =
-        reinterpret_cast<ClGetExtensionFunctionAddress>(
-            dlsym(h, "clGetExtensionFunctionAddress"));
-
-    auto directIcd = reinterpret_cast<ClIcdGetPlatformIDsKHR>(
-        dlsym(h, "clIcdGetPlatformIDsKHR"));
-
-    ClIcdGetPlatformIDsKHR icd = directIcd;
-    if (!icd && getExtensionFunctionAddress) {
-        icd = reinterpret_cast<ClIcdGetPlatformIDsKHR>(
-            getExtensionFunctionAddress("clIcdGetPlatformIDsKHR"));
-    }
-
-    if (!icd) {
-        dlclose(h);
-        return false;
-    }
-
-    cl_uint count = 0;
-    const cl_int rc = icd(0, nullptr, &count);
-    const bool ok = (rc == CL_SUCCESS && count > 0);
+    // Never call an OpenCL entry point during discovery. Some OEM drivers
+    // block inside clGetPlatformIDs(). The real FFmpeg smoke test below is
+    // the authoritative runtime capability check.
+    const bool hasPlatformIds = hasSymbol(h, "clGetPlatformIDs");
+    const bool hasDirectIcd = hasSymbol(h, "clIcdGetPlatformIDsKHR");
+    if (isIcd) *isIcd = hasDirectIcd;
     dlclose(h);
-    return ok;
+    return hasPlatformIds;
+}
+
+static std::vector<std::string> directProviderCandidates() {
+    const bool is64 = sizeof(void*) == 8;
+    std::vector<std::string> out;
+    auto add = [&](const char* value) {
+        if (!value || !*value) return;
+        for (const auto& existing : out) if (existing == value) return;
+        out.emplace_back(value);
+    };
+
+    // Absolute vendor paths only. Never use generic libOpenCL.so here because
+    // Android may resolve that name to another loader.
+    if (is64) {
+        add("/system/vendor/lib64/libOpenCL.so");
+        add("/vendor/lib64/libOpenCL.so");
+        add("/odm/lib64/libOpenCL.so");
+        add("/product/lib64/libOpenCL.so");
+        add("/system/vendor/lib64/libGLES_mali.so");
+        add("/vendor/lib64/libGLES_mali.so");
+        add("/odm/lib64/libGLES_mali.so");
+        add("/system/vendor/lib64/egl/libGLES_mali.so");
+        add("/vendor/lib64/egl/libGLES_mali.so");
+        add("/odm/lib64/egl/libGLES_mali.so");
+        add("/system/vendor/lib64/libmali.so");
+        add("/vendor/lib64/libmali.so");
+        add("/odm/lib64/libmali.so");
+        add("/system/vendor/lib64/libPVROCL.so");
+        add("/vendor/lib64/libPVROCL.so");
+        add("/odm/lib64/libPVROCL.so");
+    } else {
+        add("/system/vendor/lib/libOpenCL.so");
+        add("/vendor/lib/libOpenCL.so");
+        add("/odm/lib/libOpenCL.so");
+        add("/product/lib/libOpenCL.so");
+        add("/system/vendor/lib/libGLES_mali.so");
+        add("/vendor/lib/libGLES_mali.so");
+        add("/odm/lib/libGLES_mali.so");
+        add("/system/vendor/lib/egl/libGLES_mali.so");
+        add("/vendor/lib/egl/libGLES_mali.so");
+        add("/odm/lib/egl/libGLES_mali.so");
+        add("/system/vendor/lib/libmali.so");
+        add("/vendor/lib/libmali.so");
+        add("/odm/lib/libmali.so");
+        add("/system/vendor/lib/libPVROCL.so");
+        add("/vendor/lib/libPVROCL.so");
+        add("/odm/lib/libPVROCL.so");
+    }
+    return out;
 }
 
 static std::string configureKhronosLoader() {
-    const auto paths = candidates();
     std::ostringstream report;
-    int icdCompatible = 0;
-
-    for (const auto& path : paths) {
-        if (!hasIcdCompatiblePlatform(path)) continue;
-
-        if (setenv("OCL_ICD_FILENAMES", path.c_str(), 1) != 0) {
-            return "ICD-compatible OpenCL provider found at " + path +
-                   ", but setenv(OCL_ICD_FILENAMES) failed";
-        }
-        setenv("OCL_ICD_ENABLE_TRACE", "1", 1);
-        ++icdCompatible;
-        report << "configured Khronos loader OCL_ICD_FILENAMES=" << path
-               << " icd_compatible=" << icdCompatible;
-        return report.str();
+    const char* existing = std::getenv("OCL_ICD_FILENAMES");
+    if (existing && *existing) {
+        return std::string("preserving existing OCL_ICD_FILENAMES=") + existing;
     }
 
-    // Android vendor OpenCL implementations are often valid OpenCL providers
-    // without Khronos ICD entry points. The native probe above has already shown
-    // that such a library can enumerate a real GPU platform. The patched static
-    // Khronos loader can accept this legacy/direct form, so select it explicitly.
-    // Prefer absolute vendor paths first: a generic libOpenCL.so may itself be
-    // the Khronos loader and therefore only report CL_PLATFORM_NOT_FOUND_KHR.
-    std::vector<std::string> directCandidates;
-    auto addDirect = [&](const char* value) {
-        if (!value || !*value) return;
-        for (const auto& existing : directCandidates) {
-            if (existing == value) return;
-        }
-        directCandidates.emplace_back(value);
-    };
-    const bool is64 = sizeof(void*) == 8;
-    if (is64) {
-        addDirect("/system/vendor/lib64/libOpenCL.so");
-        addDirect("/vendor/lib64/libOpenCL.so");
-        addDirect("/odm/lib64/libOpenCL.so");
-        addDirect("/product/lib64/libOpenCL.so");
-    } else {
-        addDirect("/system/vendor/lib/libOpenCL.so");
-        addDirect("/vendor/lib/libOpenCL.so");
-        addDirect("/odm/lib/libOpenCL.so");
-        addDirect("/product/lib/libOpenCL.so");
-    }
-    for (const auto& path : candidates()) addDirect(path.c_str());
-
-    for (const auto& path : directCandidates) {
-        if (!hasUsablePlatform(path)) continue;
+    // Standard ICD discovery: symbol inspection only.
+    for (const auto& path : candidates()) {
+        bool isIcd = false;
+        if (!inspectIcdProvider(path, &isIcd) || !isIcd) continue;
         if (setenv("OCL_ICD_FILENAMES", path.c_str(), 1) != 0) {
-            return "usable Android direct OpenCL provider found at " + path +
-                   ", but setenv(OCL_ICD_FILENAMES) failed";
+            return "ICD provider detected at " + path + " but setenv failed";
         }
         setenv("OCL_ICD_ENABLE_TRACE", "1", 1);
         report << "configured Khronos loader OCL_ICD_FILENAMES=" << path
-               << " mode=android-direct-legacy";
+               << " mode=standard-icd-symbol";
         return report.str();
     }
 
-    return "no usable OpenCL provider found; leaving existing loader discovery unchanged";
+    // Android direct provider fallback. Narzo/MediaTek Mali exposes ordinary
+    // clGetPlatformIDs but no clIcdGetPlatformIDsKHR. Select by symbols only;
+    // FFmpeg performs the real GPU capability check afterward.
+    for (const auto& path : directProviderCandidates()) {
+        bool isIcd = false;
+        if (!inspectIcdProvider(path, &isIcd) || isIcd) continue;
+        if (setenv("OCL_ICD_FILENAMES", path.c_str(), 1) != 0) {
+            return "Android direct OpenCL provider detected at " + path + " but setenv failed";
+        }
+        setenv("OCL_ICD_ENABLE_TRACE", "1", 1);
+        report << "configured Khronos loader OCL_ICD_FILENAMES=" << path
+               << " mode=android-direct-symbol";
+        return report.str();
+    }
+
+    return "no OpenCL provider selected by symbol-only discovery; leaving Android/default loader discovery unchanged";
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -323,7 +236,8 @@ Java_com_example_data_engine_OpenClNativeProbe_nativeProbe(JNIEnv* env, jclass) 
     // nativeProbe JNI entry point so an incremental/stale APK cannot expose
     // a new JNI symbol mismatch.
     const std::string loader = configureKhronosLoader();
-    const std::string report = loader + "\n" + runProbe();
-    LOGD("%s", report.c_str());
-    return env->NewStringUTF(report.c_str());
+    // This JNI probe only selects the provider. Never enumerate OpenCL here;
+    // FFmpeg's bounded smoke test is the authoritative capability check.
+    LOGD("%s", loader.c_str());
+    return env->NewStringUTF(loader.c_str());
 }
