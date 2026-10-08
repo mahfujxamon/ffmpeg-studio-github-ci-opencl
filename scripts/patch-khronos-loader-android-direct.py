@@ -373,8 +373,8 @@ extern void *ffmpegkit_direct_get_proc(const char *functionName);
     text = text.replace(include_anchor, include_block, 1)
 
     platform_anchor = '''clGetPlatformIDs(cl_uint num_entries,
-    cl_platform_id * platforms,
-    cl_uint * num_platforms) CL_API_SUFFIX__VERSION_1_0
+    cl_platform_id* platforms,
+    cl_uint* num_platforms)
 {
 '''
     platform_insert = '''#if defined(__ANDROID__)
@@ -396,7 +396,7 @@ extern void *ffmpegkit_direct_get_proc(const char *functionName);
     text = text.replace(platform_anchor, platform_anchor + platform_insert, 1)
 
     ext_anchor = '''clGetExtensionFunctionAddressForPlatform(cl_platform_id platform,
-    const char * function_name) CL_API_SUFFIX__VERSION_1_2
+    const char* function_name)
 {
 '''
     ext_insert = '''#if defined(__ANDROID__)
