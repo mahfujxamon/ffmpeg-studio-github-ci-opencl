@@ -50,8 +50,19 @@ static pthread_once_t ffmpegkitDirectOnce = PTHREAD_ONCE_INIT;
 
 static void ffmpegkitDirectProbeOnce(void)
 {
-    char *filenames = khrIcd_secure_getenv("OCL_ICD_FILENAMES");
+    /*
+     * New direct-provider channel. This is deliberately separate from
+     * OCL_ICD_FILENAMES so the Khronos ICD enumerator never sees a non-ICD
+     * Android vendor library.
+     *
+     * Keep OCL_ICD_FILENAMES as a compatibility fallback for older app builds.
+     */
+    char *filenames =
+        khrIcd_secure_getenv("FFMPEGKIT_OPENCL_DIRECT_LIBRARY");
     char *cursor;
+
+    if (!filenames)
+        filenames = khrIcd_secure_getenv("OCL_ICD_FILENAMES");
 
     if (!filenames)
         return;
