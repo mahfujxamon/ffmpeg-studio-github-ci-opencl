@@ -280,10 +280,36 @@ class NativeFfmpegEngine : ExecutionEngine {
         val preparation = ensureOpenClStartup()
 
         Thread({
+            // Bound the native JNI probe separately. The v14 timeout only covered
+            // FFmpegKit.executeAsync(), but OpenClNativeProbe.probe() runs native
+            // OpenCL calls synchronously before that timeout starts. A broken/OEM
+            // OpenCL loader can block inside clGetPlatformIDs(), leaving the UI at
+            // CONFIGURED / CHECKING forever. Run the native probe on a daemon worker
+            // and give it a short hard deadline.
+            val nativeProbeTimeoutMs = 5_000L
+            val nativeProbeTask = java.util.concurrent.FutureTask<String> {
+                try {
+                    OpenClNativeProbe.probe()
+                } catch (t: Throwable) {
+                    "native probe exception: ${buildDetailedErrorChain(t)}"
+                }
+            }
+            Thread(nativeProbeTask, "opencl-native-probe-worker").apply {
+                isDaemon = true
+                start()
+            }
+
+            var nativeProbeTimedOut = false
             val nativeReport = try {
-                OpenClNativeProbe.probe()
+                nativeProbeTask.get(
+                    nativeProbeTimeoutMs,
+                    java.util.concurrent.TimeUnit.MILLISECONDS
+                )
+            } catch (_: java.util.concurrent.TimeoutException) {
+                nativeProbeTimedOut = true
+                "native probe timed out after ${nativeProbeTimeoutMs}ms; clGetPlatformIDs() did not return"
             } catch (t: Throwable) {
-                "native probe exception: ${buildDetailedErrorChain(t)}"
+                "native probe wait exception: ${buildDetailedErrorChain(t)}"
             }
 
             val probeCommand =
@@ -309,6 +335,20 @@ class NativeFfmpegEngine : ExecutionEngine {
                 callbacks.forEach { callback ->
                     try { callback(result) } catch (_: Throwable) { }
                 }
+            }
+
+            if (nativeProbeTimedOut) {
+                val detail = buildString {
+                    append(preparation.message)
+                    append(" Native=")
+                    append(nativeReport.takeLast(2400))
+                    append(" Probe=native OpenCL capability probe timed out after ")
+                    append(nativeProbeTimeoutMs)
+                    append("ms and was abandoned on its daemon worker. ")
+                    append("The device OpenCL loader did not return from native enumeration.")
+                }
+                complete(OpenClRuntime.ProbeResult(false, detail))
+                return@Thread
             }
 
             try {
