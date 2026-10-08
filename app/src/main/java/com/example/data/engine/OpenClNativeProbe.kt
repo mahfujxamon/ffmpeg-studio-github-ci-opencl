@@ -24,9 +24,16 @@ object OpenClNativeProbe {
     } else {
         try {
             // Reuse the existing nativeProbe JNI entry point. The native side
-            // configures OCL_ICD_FILENAMES before running the diagnostic.
+            // configures either a standard ICD or a dedicated Android direct
+            // provider before the FFmpeg capability test.
             val report = nativeProbe()
             report.lineSequence().firstOrNull { it.startsWith("configured Khronos loader") }
+                ?: report.lineSequence().firstOrNull {
+                    it.startsWith("configured Android direct OpenCL provider")
+                }
+                ?: report.lineSequence().firstOrNull {
+                    it.startsWith("preserving existing OCL_ICD_FILENAMES")
+                }
                 ?: report.lineSequence().firstOrNull { it.startsWith("usable OpenCL provider found") }
                 ?: report.lineSequence().firstOrNull { it.startsWith("no usable OpenCL provider") }
                 ?: "native OpenCL loader configuration result unavailable"
