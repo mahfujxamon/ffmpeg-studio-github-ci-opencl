@@ -64,9 +64,9 @@ static void ffmpegkitDirectProbeOnce(void)
         void *icdIds;
 
         if (next)
-            *next = '\0';
+            *next = '\\0';
 
-        if (*cursor == '\0') {
+        if (*cursor == '\\0') {
             if (!next)
                 break;
             cursor = next + 1;
@@ -261,6 +261,21 @@ def patch_generated_dispatch(path: Path) -> None:
         print(f"PASS: generated dispatch already patched: {path}")
         return
 
+    # The generated dispatcher includes icd.h/icd_dispatch.h but the helper
+    # functions live in icd.c. Add explicit declarations before any hook calls.
+    include_anchor = '#include "icd_dispatch.h"\\n'
+    include_block = '''#include "icd_dispatch.h"
+
+#if defined(__ANDROID__)
+/* Implemented in icd.c by the Android direct-provider bridge. */
+extern int ffmpegkit_direct_provider_active(void);
+extern void *ffmpegkit_direct_get_proc(const char *functionName);
+#endif
+'''
+    if include_anchor not in text:
+        raise SystemExit("ERROR: generated dispatch include anchor not found")
+    text = text.replace(include_anchor, include_block, 1)
+
     funcs = find_public_functions(text)
     if not funcs:
         raise SystemExit("ERROR: no public OpenCL functions found in generated dispatch source")
@@ -325,7 +340,6 @@ def patch_generated_dispatch(path: Path) -> None:
     print(
         f"PASS: patched {patched_count} Android direct-provider dispatch hooks into {path}"
     )
-
 
 def main() -> None:
     if len(sys.argv) != 3:
