@@ -116,28 +116,19 @@ object OpenClRuntime {
             return result
         }
 
-        // Important Android-specific step:
-        // If no .icd file is present, many shipped Android GPU runtimes are
-        // exposed directly as shared libraries such as libGLES_mali.so.
-        // Real apps commonly load these by name. We give the Khronos loader the
-        // same vendor-library candidates through OCL_ICD_FILENAMES. Invalid or
-        // non-ICD candidates are ignored by the loader; a valid cl_khr_icd
-        // implementation can then be enumerated.
-        val configured = setEnvironment(
-            OCL_ICD_FILENAMES,
-            vendorCandidates.joinToString(File.pathSeparator)
-        )
-
+        // Do NOT force a list of arbitrary Android shared libraries into
+        // OCL_ICD_FILENAMES. Khronos explicitly expects that variable to name
+        // ICDs. On some MediaTek/Realme firmware libOpenCL.so is itself the
+        // system loader or libGLES_mali.so is a direct OpenCL implementation,
+        // not an ICD. Forcing those names can make the loader recurse, block, or
+        // return no platform. The native probe below selects an actual ICD when
+        // one exists; otherwise we preserve the platform's normal discovery.
         val result = Preparation(
-            configured = configured,
-            icdLibraries = vendorCandidates,
+            configured = true,
+            icdLibraries = emptyList(),
             searchedDirectories = searched,
             libraryCandidates = vendorCandidates,
-            message = if (configured) {
-                "No .icd registration found; configured runtime vendor-library candidates for Khronos loader discovery."
-            } else {
-                "No .icd registration found and runtime vendor-library environment setup failed."
-            }
+            message = "No .icd registration found; preserving Android/default OpenCL loader discovery. Native probe will select an ICD only when it is actually ICD-compatible."
         )
         preparationCache = result
         return result

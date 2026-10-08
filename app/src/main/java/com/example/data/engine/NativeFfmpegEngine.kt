@@ -279,11 +279,12 @@ class NativeFfmpegEngine : ExecutionEngine {
 
         val preparation = ensureOpenClStartup()
 
-        // Do direct Android vendor discovery first, off the caller thread. This
-        // selects the device's actual working libOpenCL.so (or equivalent) and
-        // updates OCL_ICD_FILENAMES before FFmpeg's static Khronos loader starts.
         Thread({
-            val nativeReport = OpenClNativeProbe.probe()
+            val nativeReport = try {
+                OpenClNativeProbe.probe()
+            } catch (t: Throwable) {
+                "native probe exception: ${buildDetailedErrorChain(t)}"
+            }
 
             val probeCommand =
                 "-hide_banner -nostdin -loglevel error " +
@@ -293,24 +294,42 @@ class NativeFfmpegEngine : ExecutionEngine {
                     "-vf \"hwupload,unsharp_opencl=lx=5:ly=5:la=1.5,hwdownload,format=yuv420p\" " +
                     "-frames:v 1 -f null -"
 
+            val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+            val timeoutMs = 12_000L
+
+            fun complete(result: OpenClRuntime.ProbeResult) {
+                if (!finished.compareAndSet(false, true)) return
+                OpenClRuntime.setProbeResult(result)
+                val callbacks = synchronized(openClProbeCallbacks) {
+                    openClProbeInFlight = false
+                    val pending = openClProbeCallbacks.toList()
+                    openClProbeCallbacks.clear()
+                    pending
+                }
+                callbacks.forEach { callback ->
+                    try { callback(result) } catch (_: Throwable) { }
+                }
+            }
+
             try {
-                // This worker thread owns the complete capability check. Using
-                // the blocking FFmpegKit call here eliminates the OEM race where
-                // render starts before the OpenCL probe callback has completed.
-                val session = FFmpegKit.execute(probeCommand)
-                val success = ReturnCode.isSuccess(session.returnCode)
-                val ffmpegDetail = if (success) {
+                // Use executeAsync here. A few Android vendor OpenCL loaders can
+                // block inside clGetPlatformIDs during process initialization.
+                // The old synchronous execute() made the UI wait forever on those
+                // devices. A bounded async probe lets us cancel the stuck session
+                // and return a real diagnostic instead.
+                val session = FFmpegKit.executeAsync(probeCommand) { completed ->
+                    val success = ReturnCode.isSuccess(completed.returnCode)
+                    val ffmpegDetail = if (success) {
                         "FFmpeg OpenCL hardware-filter smoke test succeeded (device init + hwupload + unsharp_opencl + hwdownload)."
                     } else {
-                        val failure = session.failStackTrace
-                        val logs = session.logsAsString
+                        val failure = completed.failStackTrace
+                        val logs = completed.logsAsString
                         when {
-                            !failure.isNullOrBlank() -> failure.takeLast(1200)
-                            !logs.isNullOrBlank() -> logs.takeLast(1200)
-                            else -> "FFmpeg OpenCL probe failed with return code ${session.returnCode?.value}."
+                            !failure.isNullOrBlank() -> failure.takeLast(1600)
+                            !logs.isNullOrBlank() -> logs.takeLast(1600)
+                            else -> "FFmpeg OpenCL probe failed with return code ${completed.returnCode?.value}."
                         }
                     }
-
                     val detail = buildString {
                         append(preparation.message)
                         if (preparation.icdLibraries.isNotEmpty()) {
@@ -318,48 +337,38 @@ class NativeFfmpegEngine : ExecutionEngine {
                             append(preparation.icdLibraries.joinToString())
                         }
                         append(" Native=")
-                        append(nativeReport.replace('\n', ' ').takeLast(2200))
+                        append(nativeReport.replace('\n', ' ').takeLast(2400))
                         append(" Probe=")
                         append(ffmpegDetail)
                     }
-
-                val result = OpenClRuntime.ProbeResult(
-                    available = success,
-                    detail = detail
-                )
-                OpenClRuntime.setProbeResult(result)
-
-                val callbacks = synchronized(openClProbeCallbacks) {
-                    openClProbeInFlight = false
-                    val pending = openClProbeCallbacks.toList()
-                    openClProbeCallbacks.clear()
-                    pending
+                    complete(OpenClRuntime.ProbeResult(success, detail))
                 }
-                callbacks.forEach { callback ->
+
+                Thread({
                     try {
-                        callback(result)
-                    } catch (_: Throwable) {
-                        // A stale UI observer must not break the remaining callbacks.
+                        Thread.sleep(timeoutMs)
+                    } catch (_: InterruptedException) {
+                        return@Thread
                     }
-                }
+                    if (!finished.get()) {
+                        try { session.cancel() } catch (_: Throwable) { }
+                        val detail = buildString {
+                            append(preparation.message)
+                            append(" Native=")
+                            append(nativeReport.replace('\n', ' ').takeLast(2400))
+                            append(" Probe=timed out after ${timeoutMs}ms and was cancelled. ")
+                            append("The device OpenCL runtime did not respond through the Khronos FFmpeg path.")
+                        }
+                        complete(OpenClRuntime.ProbeResult(false, detail))
+                    }
+                }, "opencl-probe-timeout").start()
             } catch (t: Throwable) {
-                val result = OpenClRuntime.ProbeResult(
-                    available = false,
-                    detail = "${preparation.message} Native=${nativeReport.replace('\n', ' ').takeLast(2200)} Probe exception=${buildDetailedErrorChain(t)}"
+                complete(
+                    OpenClRuntime.ProbeResult(
+                        false,
+                        "${preparation.message} Native=${nativeReport.replace('\n', ' ').takeLast(2400)} Probe exception=${buildDetailedErrorChain(t)}"
+                    )
                 )
-                OpenClRuntime.setProbeResult(result)
-                val callbacks = synchronized(openClProbeCallbacks) {
-                    openClProbeInFlight = false
-                    val pending = openClProbeCallbacks.toList()
-                    openClProbeCallbacks.clear()
-                    pending
-                }
-                callbacks.forEach { callback ->
-                    try {
-                        callback(result)
-                    } catch (_: Throwable) {
-                    }
-                }
             }
         }, "opencl-capability-probe").start()
     }
