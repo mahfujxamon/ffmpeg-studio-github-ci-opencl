@@ -13,11 +13,11 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.ffmpegstudio.kxvq"
+    applicationId = "com.aistudio.ffmpegstudio.kxvq.ffmpeg9"
     minSdk = 24
     targetSdk = 36
-    versionCode = 11
-    versionName = "1.1-opencl-cross-device"
+    versionCode = 1
+    versionName = "1.0-ffmpeg9-modified-opencl"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     ndk {
