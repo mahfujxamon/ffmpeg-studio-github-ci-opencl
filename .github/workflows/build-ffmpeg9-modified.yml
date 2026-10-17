@@ -18,11 +18,6 @@ env:
   OPENCL_HEADERS_TAG: v2026.05.29
   OPENCL_LOADER_TAG: v2026.05.29
 
-  # FFmpeg 8.x does not ship scale_opencl upstream. This pinned maintained
-  # backport adds the filter and its OpenCL kernels.
-  OPENCL_SCALE_PATCH_REF: 7fe3ec82a0c4f7ad0ed8c8f52359c2b579f3e28c
-  OPENCL_SCALE_PATCH_BLOB_SHA1: ae6b34d9e0753a0c4c33ab8882cd01f25eff7526
-  OPENCL_SCALE_PATCH_URL: https://raw.githubusercontent.com/SynoCommunity/spksrc/7fe3ec82a0c4f7ad0ed8c8f52359c2b579f3e28c/cross/ffmpeg8/patches/1006-jellyfin-0006-add-opencl-scaler-and-pixfmt-converter-impl.patch
 
 jobs:
   build:
@@ -729,17 +724,17 @@ jobs:
           if text.count(anchor) != 1:
               raise SystemExit("ERROR: expected exactly one FFmpeg patch hook anchor")
           hook = r'''  # FFMPEGKIT_CUSTOM_FFMPEG_N902_HOOK
-          echo "INFO: replacing downloaded FFmpeg with modified FFmpeg n9.0.2" >> "${BASEDIR}/build.log"
-          CUSTOM_FFMPEG_SRC="${BASEDIR}/src/ffmpeg-n9.0.2"
-          rm -rf "${CUSTOM_FFMPEG_SRC}"
-          git clone --depth 1 --branch n9.0.2 https://github.com/FFmpeg/FFmpeg.git "${CUSTOM_FFMPEG_SRC}" || exit 1
-          git -C "${CUSTOM_FFMPEG_SRC}" apply --check "${GITHUB_WORKSPACE}/patches/ffmpeg-n9.0.2-modified.patch" || exit 1
-          git -C "${CUSTOM_FFMPEG_SRC}" apply "${GITHUB_WORKSPACE}/patches/ffmpeg-n9.0.2-modified.patch" || exit 1
-          test -f "${CUSTOM_FFMPEG_SRC}/libavfilter/vf_scale_opencl.c" || exit 1
-          grep -F "ff_vf_scale_opencl" "${CUSTOM_FFMPEG_SRC}/libavfilter/allfilters.c" || exit 1
-          rm -rf "${BASEDIR}/src/ffmpeg"
-          mv "${CUSTOM_FFMPEG_SRC}" "${BASEDIR}/src/ffmpeg"
-          echo "INFO: modified FFmpeg n9.0.2 source installed successfully" >> "${BASEDIR}/build.log"
+            echo "INFO: replacing downloaded FFmpeg with modified FFmpeg n9.0.2" >> "${BASEDIR}/build.log"
+            CUSTOM_FFMPEG_SRC="${BASEDIR}/src/ffmpeg-n9.0.2"
+            rm -rf "${CUSTOM_FFMPEG_SRC}"
+            git clone --depth 1 --branch n9.0.2 https://github.com/FFmpeg/FFmpeg.git "${CUSTOM_FFMPEG_SRC}" || exit 1
+            git -C "${CUSTOM_FFMPEG_SRC}" apply --check "${GITHUB_WORKSPACE}/patches/ffmpeg-n9.0.2-modified.patch" || exit 1
+            git -C "${CUSTOM_FFMPEG_SRC}" apply "${GITHUB_WORKSPACE}/patches/ffmpeg-n9.0.2-modified.patch" || exit 1
+            test -f "${CUSTOM_FFMPEG_SRC}/libavfilter/vf_scale_opencl.c" || exit 1
+            grep -F "ff_vf_scale_opencl" "${CUSTOM_FFMPEG_SRC}/libavfilter/allfilters.c" || exit 1
+            rm -rf "${BASEDIR}/src/ffmpeg"
+            mv "${CUSTOM_FFMPEG_SRC}" "${BASEDIR}/src/ffmpeg"
+            echo "INFO: modified FFmpeg n9.0.2 source installed successfully" >> "${BASEDIR}/build.log"
           '''
           text = text.replace(anchor, anchor + hook, 1)
           path.write_text(text)
