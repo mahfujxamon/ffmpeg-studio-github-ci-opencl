@@ -79,3 +79,16 @@ header as a second patch. The OpenCL headers are compiled with
 ## Native FFmpegKit build source
 
 CI intentionally ignores the checked-in/exposed `app/ffmpeg-kit-custom` JNI payload. The authoritative FFmpegKit AAR is generated from the pinned FFmpegKit/FFmpeg sources in the workflow. GnuTLS is disabled and OpenSSL is enabled for the native build.
+
+## Isolated modified FFmpeg n9.0.2 test build
+
+This branch is intentionally separate from `main` so the existing OpenCL app build remains unchanged. The new workflow, `.github/workflows/build-ffmpeg9-modified.yml`, builds a separate debug APK using the supplied FFmpeg n9.0.2 source changes.
+
+- The patch is stored compressed at `patches/ffmpeg-n9.0.2-modified.patch.gz.b64` and its SHA-256 is checked before use.
+- CI replaces the FFmpegKit-downloaded FFmpeg source with the pinned `n9.0.2` source and applies the supplied source patch before compilation.
+- The test app uses application ID `com.aistudio.ffmpegstudio.kxvq.ffmpeg9` and a distinct launcher label, so it can be installed alongside the existing app.
+- CI verifies that the added OpenCL filters are registered in the built `libavfilter.so`, builds the Android app, runs unit tests, and uploads the AAR/APK/log artifacts.
+- A successful CI build is not proof of GPU execution on a physical Android device; runtime OpenCL initialization and per-filter tests are still required on the target device.
+
+This branch is experimental and is not merged into `main`.
+
