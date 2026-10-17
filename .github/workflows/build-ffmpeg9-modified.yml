@@ -1376,14 +1376,16 @@ jobs:
           echo "========================================"
           echo "SHA256"
           echo "========================================"
-          sha256sum "$APK" | tee app-debug.apk.sha256
-
           mkdir -p dist
           cp "$APK" dist/ffmpeg-studio-ffmpeg9-modified-debug.apk
-          cp app-debug.apk.sha256 dist/ffmpeg-studio-ffmpeg9-modified-debug.apk.sha256
 
-          # Verify the COPIED artifact bytes again.
-          sha256sum -c dist/ffmpeg-studio-ffmpeg9-modified-debug.apk.sha256
+          # Hash and verify the exact copied APK artifact.
+          (
+            cd dist
+            sha256sum ffmpeg-studio-ffmpeg9-modified-debug.apk \
+              | tee ffmpeg-studio-ffmpeg9-modified-debug.apk.sha256
+            sha256sum -c ffmpeg-studio-ffmpeg9-modified-debug.apk.sha256
+          )
           unzip -t dist/ffmpeg-studio-ffmpeg9-modified-debug.apk
 
           echo
