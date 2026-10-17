@@ -13,23 +13,29 @@ test -f "$SO"
 required=(
   avgblur_opencl
   boxblur_opencl
+  blend_opencl
+  crop_opencl
+  eq_opencl
   colorkey_opencl
   convolution_opencl
   deshake_opencl
   dilation_opencl
   erosion_opencl
+  hflip_opencl
   nlmeans_opencl
   overlay_opencl
   pad_opencl
   prewitt_opencl
   program_opencl
   remap_opencl
+  rotate_opencl
   roberts_opencl
   scale_opencl
   sobel_opencl
   tonemap_opencl
   transpose_opencl
   unsharp_opencl
+  vflip_opencl
   xfade_opencl
 )
 
