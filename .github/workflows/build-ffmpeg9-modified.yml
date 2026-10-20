@@ -233,6 +233,74 @@ jobs:
 
 
       # ============================================================
+      # 8.5. Port FFmpegKit's older fftools call sites to FFmpeg 9 public APIs.
+      # FFmpegKit 8.1.9's Android command wrapper predates FFmpeg 9.0.2.
+      # Keep the FFmpegKit Java/JNI bridge, but update the API calls that
+      # no longer exist in FFmpeg 9's public headers.
+      # ============================================================
+      - name: Patch FFmpegKit fftools for FFmpeg 9 public APIs
+        run: |
+          set -euxo pipefail
+          SRC="${GITHUB_WORKSPACE}/ffmpegkit/android-8.1-lts/android/ffmpeg-kit-android-lib/src/main/cpp/fftools_ffmpeg.c"
+          test -f "$SRC"
+          python3 - "$SRC" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          s = p.read_text()
+          old = """    ret = avformat_transfer_internal_stream_timing_info(of->format, ost->st, ist->st, copy_tb);
+              if (ret < 0)
+                  return ret;
+          """
+          # Preserve stream-copy timing behavior using FFmpeg 9's public API:
+          # its upstream fftools no longer calls the removed internal helper.
+          if s.count("avformat_transfer_internal_stream_timing_info(") != 1:
+              raise SystemExit("ERROR: expected exactly one removed timing helper call")
+          s = s.replace(old, "", 1) if s.count(old) == 1 else s.replace(
+              "    ret = avformat_transfer_internal_stream_timing_info(of->format, ost->st, ist->st, copy_tb);\n"
+              "    if (ret < 0)\n"
+              "        return ret;\n",
+              "    /* FFmpeg 9 removed the internal timing-transfer helper. */\n",
+              1)
+          old_tb = "av_add_q(av_stream_get_codec_timebase(ost->st), (AVRational){0, 1})"
+          if s.count(old_tb) != 1:
+              raise SystemExit("ERROR: expected exactly one removed codec-timebase call")
+          s = s.replace(old_tb, "av_add_q(ist->st->time_base, (AVRational){0, 1})", 1)
+          old_rates = """        if (enc_ctx->codec->supported_framerates && !ost->force_fps) {
+                      int idx = av_find_nearest_q_idx(ost->frame_rate, enc_ctx->codec->supported_framerates);
+                      ost->frame_rate = enc_ctx->codec->supported_framerates[idx];
+                  }
+          """
+          # Exact indentation in this upstream wrapper is four spaces for if,
+          # twelve for the nested statement.
+          old_rates = ("        if (enc_ctx->codec->supported_framerates && !ost->force_fps) {\n"
+                       "            int idx = av_find_nearest_q_idx(ost->frame_rate, enc_ctx->codec->supported_framerates);\n"
+                       "            ost->frame_rate = enc_ctx->codec->supported_framerates[idx];\n"
+                       "        }")
+          new_rates = ("        if (!ost->force_fps) {\n"
+                       "            const AVRational *supported_framerates = NULL;\n"
+                       "            ret = avcodec_get_supported_config(enc_ctx, NULL, AV_CODEC_CONFIG_FRAME_RATE, 0,\n"
+                       "                                               (const void **)&supported_framerates, NULL);\n"
+                       "            if (ret < 0)\n"
+                       "                return ret;\n"
+                       "            if (supported_framerates) {\n"
+                       "                int idx = av_find_nearest_q_idx(ost->frame_rate, supported_framerates);\n"
+                       "                ost->frame_rate = supported_framerates[idx];\n"
+                       "            }\n"
+                       "        }")
+          if s.count(old_rates) != 1:
+              raise SystemExit("ERROR: expected exactly one legacy supported_framerates block")
+          s = s.replace(old_rates, new_rates, 1)
+          for removed in ("avformat_transfer_internal_stream_timing_info(", "av_stream_get_codec_timebase(", "enc_ctx->codec->supported_framerates"):
+              if removed in s:
+                  raise SystemExit(f"ERROR: legacy FFmpeg API remains: {removed}")
+          p.write_text(s)
+          print("PASS: FFmpegKit fftools compatibility changes applied")
+          PY
+          grep -nE 'FFmpeg 9 removed|avcodec_get_supported_config|supported_framerates' "$SRC"
+          ! grep -nE 'avformat_transfer_internal_stream_timing_info|av_stream_get_codec_timebase|enc_ctx->codec->supported_framerates' "$SRC"
+
+      # ============================================================
       # 9. Clone official Khronos OpenCL-Headers
       # ============================================================
       - name: Clone Khronos OpenCL Headers
