@@ -311,7 +311,7 @@ jobs:
           for line in lines:
               if s.count(line) != 1:
                   raise SystemExit(f"ERROR: expected exactly one obsolete FFmpeg 8 ffprobe line: {line}")
-              s = s.replace(line + "\\n", "", 1)
+              s = "\n".join(item for item in s.splitlines() if item != line) + ("\n" if s.endswith("\n") else "")
           if "dec_ctx->properties & FF_CODEC_PROPERTY_" in s:
               raise SystemExit("ERROR: obsolete private AVCodecContext property access remains")
           p.write_text(s)
