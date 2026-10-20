@@ -751,6 +751,20 @@ jobs:
                   raise SystemExit(f"ERROR: {name}: expected {count} old priv_size fields, found {actual}")
               path.write_text(text.replace(".p.priv_size", ".priv_size"))
               print(f"Fixed FFmpeg 9 FFFilter priv_size: {name} ({count})")
+          # The two flip filters share one option table. AVFILTER_DEFINE_CLASS(name)
+          # hardcodes name_options, so use the explicit-options macro for both.
+          flip_path = root / "vf_flip_opencl.c"
+          flip_text = flip_path.read_text()
+          class_fixes = {
+              "AVFILTER_DEFINE_CLASS(hflip_opencl);": 'AVFILTER_DEFINE_CLASS_EXT(hflip_opencl, "hflip_opencl", flip_opencl_options);',
+              "AVFILTER_DEFINE_CLASS(vflip_opencl);": 'AVFILTER_DEFINE_CLASS_EXT(vflip_opencl, "vflip_opencl", flip_opencl_options);',
+          }
+          for old, new in class_fixes.items():
+              if flip_text.count(old) != 1:
+                  raise SystemExit(f"ERROR: vf_flip_opencl.c: expected one {old!r}")
+              flip_text = flip_text.replace(old, new, 1)
+          flip_path.write_text(flip_text)
+          print("Fixed FFmpeg 9 shared options table for hflip_opencl/vflip_opencl")
           PYFIX
             test -f "${CUSTOM_FFMPEG_SRC}/libavfilter/vf_scale_opencl.c" || exit 1
             grep -F "ff_vf_scale_opencl" "${CUSTOM_FFMPEG_SRC}/libavfilter/allfilters.c" || exit 1
