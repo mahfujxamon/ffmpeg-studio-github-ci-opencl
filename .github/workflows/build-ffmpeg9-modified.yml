@@ -733,25 +733,25 @@ jobs:
             # FFmpeg n9.0.2 stores FFFilter.priv_size outside AVFilter.p.
             # Correct the five newly added wrappers that used the older field path.
             python3 - "${CUSTOM_FFMPEG_SRC}" <<'PYFIX'
-            from pathlib import Path
-            import sys
-            root = Path(sys.argv[1]) / "libavfilter"
-            expected = {
-                "vf_blend_opencl.c": 1,
-                "vf_crop_opencl.c": 1,
-                "vf_eq_opencl.c": 1,
-                "vf_flip_opencl.c": 2,
-                "vf_rotate_opencl.c": 1,
-            }
-            for name, count in expected.items():
-                path = root / name
-                text = path.read_text()
-                actual = text.count(".p.priv_size")
-                if actual != count:
-                    raise SystemExit(f"ERROR: {name}: expected {count} old priv_size fields, found {actual}")
-                path.write_text(text.replace(".p.priv_size", ".priv_size"))
-                print(f"Fixed FFmpeg 9 FFFilter priv_size: {name} ({count})")
-            PYFIX
+          from pathlib import Path
+          import sys
+          root = Path(sys.argv[1]) / "libavfilter"
+          expected = {
+              "vf_blend_opencl.c": 1,
+              "vf_crop_opencl.c": 1,
+              "vf_eq_opencl.c": 1,
+              "vf_flip_opencl.c": 2,
+              "vf_rotate_opencl.c": 1,
+          }
+          for name, count in expected.items():
+              path = root / name
+              text = path.read_text()
+              actual = text.count(".p.priv_size")
+              if actual != count:
+                  raise SystemExit(f"ERROR: {name}: expected {count} old priv_size fields, found {actual}")
+              path.write_text(text.replace(".p.priv_size", ".priv_size"))
+              print(f"Fixed FFmpeg 9 FFFilter priv_size: {name} ({count})")
+          PYFIX
             test -f "${CUSTOM_FFMPEG_SRC}/libavfilter/vf_scale_opencl.c" || exit 1
             grep -F "ff_vf_scale_opencl" "${CUSTOM_FFMPEG_SRC}/libavfilter/allfilters.c" || exit 1
             rm -rf "${BASEDIR}/src/ffmpeg"
