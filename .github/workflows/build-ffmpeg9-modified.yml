@@ -317,7 +317,189 @@ jobs:
           p.write_text(s)
           print("PASS: removed obsolete FFmpeg 8 AVCodecContext property reads from ffprobe")
           PYPROBE
-          grep -nE 'FFmpeg 9 removed|avcodec_get_supported_config|supported_framerates' "$SRC"
+          MUX="${GITHUB_WORKSPACE}/ffmpegkit/android-8.1-lts/android/ffmpeg-kit-android-lib/src/main/cpp/fftools_ffmpeg_mux_init.c"
+          test -f "$MUX"
+          python3 - "$MUX" <<'PYMUX'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text()
+
+          old_layout = """static void set_channel_layout(OutputFilter *f, OutputStream *ost)
+          {
+              const AVCodec *c = ost->enc_ctx->codec;
+              int i, err;
+
+              if (ost->enc_ctx->ch_layout.order != AV_CHANNEL_ORDER_UNSPEC) {
+                  /* Pass the layout through for all orders but UNSPEC */
+                  err = av_channel_layout_copy(&f->ch_layout, &ost->enc_ctx->ch_layout);
+                  if (err < 0)
+                      report_and_exit(AVERROR(ENOMEM));
+                  return;
+              }
+
+              /* Requested layout is of order UNSPEC */
+              if (!c->ch_layouts) {
+                  /* Use the default native layout for the requested amount of channels when the
+                     encoder doesn't have a list of supported layouts */
+                  av_channel_layout_default(&f->ch_layout, ost->enc_ctx->ch_layout.nb_channels);
+                  return;
+              }
+              /* Encoder has a list of supported layouts. Pick the first layout in it with the
+                 same amount of channels as the requested layout */
+              for (i = 0; c->ch_layouts[i].nb_channels; i++) {
+                  if (c->ch_layouts[i].nb_channels == ost->enc_ctx->ch_layout.nb_channels)
+                      break;
+              }
+              if (c->ch_layouts[i].nb_channels) {
+                  /* Use it if one is found */
+                  err = av_channel_layout_copy(&f->ch_layout, &c->ch_layouts[i]);
+                  if (err < 0)
+                      report_and_exit(AVERROR(ENOMEM));
+                  return;
+              }
+              /* If no layout for the amount of channels requested was found, use the default
+                 native layout for it. */
+              av_channel_layout_default(&f->ch_layout, ost->enc_ctx->ch_layout.nb_channels);
+          }
+          """
+          new_layout = """static void set_channel_layout(OutputFilter *f, OutputStream *ost)
+          {
+              const AVChannelLayout *ch_layouts = NULL;
+              int i, err;
+
+              if (ost->enc_ctx->ch_layout.order != AV_CHANNEL_ORDER_UNSPEC) {
+                  err = av_channel_layout_copy(&f->ch_layout, &ost->enc_ctx->ch_layout);
+                  if (err < 0)
+                      report_and_exit(AVERROR(ENOMEM));
+                  return;
+              }
+
+              err = avcodec_get_supported_config(ost->enc_ctx, NULL,
+                                                 AV_CODEC_CONFIG_CHANNEL_LAYOUT, 0,
+                                                 (const void **)&ch_layouts, NULL);
+              if (err < 0)
+                  report_and_exit(err);
+
+              if (!ch_layouts) {
+                  av_channel_layout_default(&f->ch_layout, ost->enc_ctx->ch_layout.nb_channels);
+                  return;
+              }
+
+              for (i = 0; ch_layouts[i].nb_channels; i++) {
+                  if (ch_layouts[i].nb_channels == ost->enc_ctx->ch_layout.nb_channels)
+                      break;
+              }
+              if (ch_layouts[i].nb_channels) {
+                  err = av_channel_layout_copy(&f->ch_layout, &ch_layouts[i]);
+                  if (err < 0)
+                      report_and_exit(AVERROR(ENOMEM));
+                  return;
+              }
+              av_channel_layout_default(&f->ch_layout, ost->enc_ctx->ch_layout.nb_channels);
+          }
+          """
+          if s.count(old_layout) != 1:
+              raise SystemExit("ERROR: expected exactly one legacy set_channel_layout implementation")
+          s = s.replace(old_layout, new_layout, 1)
+
+          old_constraints = """        if (ost->filter) {
+                      const AVCodec *c = ost->enc_ctx->codec;
+                      OutputFilter *f = ost->filter;
+                      switch (ost->enc_ctx->codec_type) {
+                      case AVMEDIA_TYPE_VIDEO:
+                          f->frame_rate = ost->frame_rate;
+                          f->width      = ost->enc_ctx->width;
+                          f->height     = ost->enc_ctx->height;
+                          if (ost->enc_ctx->pix_fmt != AV_PIX_FMT_NONE) {
+                              f->format = ost->enc_ctx->pix_fmt;
+                          } else {
+                              f->formats = c->pix_fmts;
+                          }
+                          break;
+                      case AVMEDIA_TYPE_AUDIO:
+                          if (ost->enc_ctx->sample_fmt != AV_SAMPLE_FMT_NONE) {
+                              f->format = ost->enc_ctx->sample_fmt;
+                          } else {
+                              f->formats = c->sample_fmts;
+                          }
+                          if (ost->enc_ctx->sample_rate) {
+                              f->sample_rate = ost->enc_ctx->sample_rate;
+                          } else {
+                              f->sample_rates = c->supported_samplerates;
+                          }
+                          if (ost->enc_ctx->ch_layout.nb_channels) {
+                              set_channel_layout(f, ost);
+                          } else if (c->ch_layouts) {
+                              f->ch_layouts = c->ch_layouts;
+                          }
+                          break;
+                          }
+                      }
+          """
+          # Avoid brittle whitespace matching: isolate the exact block by anchors.
+          start = s.find("        if (ost->filter) {", s.find("/* set the filter output constraints */"))
+          end_marker = "\n    /* check filename in case of an image number is expected */"
+          end = s.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit("ERROR: could not locate output-filter constraints block")
+          block = s[start:end]
+          if block.count("c->pix_fmts") != 1 or block.count("c->sample_fmts") != 1 or block.count("c->supported_samplerates") != 1 or block.count("c->ch_layouts") != 2:
+              raise SystemExit("ERROR: output-filter constraints block did not match expected FFmpeg 8 API usage")
+          new_block = """        if (ost->filter) {
+                      OutputFilter *f = ost->filter;
+                      const enum AVPixelFormat *pix_fmts = NULL;
+                      const enum AVSampleFormat *sample_fmts = NULL;
+                      const int *sample_rates = NULL;
+                      const AVChannelLayout *ch_layouts = NULL;
+                      switch (ost->enc_ctx->codec_type) {
+                      case AVMEDIA_TYPE_VIDEO:
+                          f->frame_rate = ost->frame_rate;
+                          f->width      = ost->enc_ctx->width;
+                          f->height     = ost->enc_ctx->height;
+                          if (ost->enc_ctx->pix_fmt != AV_PIX_FMT_NONE) {
+                              f->format = ost->enc_ctx->pix_fmt;
+                          } else {
+                              err = avcodec_get_supported_config(ost->enc_ctx, NULL, AV_CODEC_CONFIG_PIX_FORMAT, 0, (const void **)&pix_fmts, NULL);
+                              if (err < 0) report_and_exit(err);
+                              f->formats = pix_fmts;
+                          }
+                          break;
+                      case AVMEDIA_TYPE_AUDIO:
+                          if (ost->enc_ctx->sample_fmt != AV_SAMPLE_FMT_NONE) {
+                              f->format = ost->enc_ctx->sample_fmt;
+                          } else {
+                              err = avcodec_get_supported_config(ost->enc_ctx, NULL, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, (const void **)&sample_fmts, NULL);
+                              if (err < 0) report_and_exit(err);
+                              f->formats = sample_fmts;
+                          }
+                          if (ost->enc_ctx->sample_rate) {
+                              f->sample_rate = ost->enc_ctx->sample_rate;
+                          } else {
+                              err = avcodec_get_supported_config(ost->enc_ctx, NULL, AV_CODEC_CONFIG_SAMPLE_RATE, 0, (const void **)&sample_rates, NULL);
+                              if (err < 0) report_and_exit(err);
+                              f->sample_rates = sample_rates;
+                          }
+                          if (ost->enc_ctx->ch_layout.nb_channels) {
+                              set_channel_layout(f, ost);
+                          } else {
+                              err = avcodec_get_supported_config(ost->enc_ctx, NULL, AV_CODEC_CONFIG_CHANNEL_LAYOUT, 0, (const void **)&ch_layouts, NULL);
+                              if (err < 0) report_and_exit(err);
+                              f->ch_layouts = ch_layouts;
+                          }
+                          break;
+                      }
+                  }
+          """
+          s = s[:start] + new_block + s[end:]
+          for removed in ("c->ch_layouts", "c->pix_fmts", "c->sample_fmts", "c->supported_samplerates"):
+              if removed in s:
+                  raise SystemExit(f"ERROR: legacy AVCodec config access remains: {removed}")
+          p.write_text(s)
+          print("PASS: ported ffmpeg_mux_init codec configuration to FFmpeg 9 public API")
+          PYMUX
+          grep -nE 'FFmpeg 9 removed|avcodec_get_supported_config|supported_framerates' "$SRC" "$MUX"
           ! grep -nE 'avformat_transfer_internal_stream_timing_info|av_stream_get_codec_timebase|enc_ctx->codec->supported_framerates' "$SRC"
           ! grep -nE 'dec_ctx->properties|FF_CODEC_PROPERTY_CLOSED_CAPTIONS|FF_CODEC_PROPERTY_FILM_GRAIN' "$PROBE"
 
