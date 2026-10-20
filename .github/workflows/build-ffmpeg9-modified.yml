@@ -297,8 +297,29 @@ jobs:
           p.write_text(s)
           print("PASS: FFmpegKit fftools compatibility changes applied")
           PY
+          PROBE="${GITHUB_WORKSPACE}/ffmpegkit/android-8.1-lts/android/ffmpeg-kit-android-lib/src/main/cpp/fftools_ffprobe.c"
+          test -f "$PROBE"
+          python3 - "$PROBE" <<'PYPROBE'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          s = p.read_text()
+          lines = [
+              '            print_int("closed_captions", !!(dec_ctx->properties & FF_CODEC_PROPERTY_CLOSED_CAPTIONS));',
+              '            print_int("film_grain", !!(dec_ctx->properties & FF_CODEC_PROPERTY_FILM_GRAIN));',
+          ]
+          for line in lines:
+              if s.count(line) != 1:
+                  raise SystemExit(f"ERROR: expected exactly one obsolete FFmpeg 8 ffprobe line: {line}")
+              s = s.replace(line + "\\n", "", 1)
+          if "dec_ctx->properties & FF_CODEC_PROPERTY_" in s:
+              raise SystemExit("ERROR: obsolete private AVCodecContext property access remains")
+          p.write_text(s)
+          print("PASS: removed obsolete FFmpeg 8 AVCodecContext property reads from ffprobe")
+          PYPROBE
           grep -nE 'FFmpeg 9 removed|avcodec_get_supported_config|supported_framerates' "$SRC"
           ! grep -nE 'avformat_transfer_internal_stream_timing_info|av_stream_get_codec_timebase|enc_ctx->codec->supported_framerates' "$SRC"
+          ! grep -nE 'dec_ctx->properties|FF_CODEC_PROPERTY_CLOSED_CAPTIONS|FF_CODEC_PROPERTY_FILM_GRAIN' "$PROBE"
 
       # ============================================================
       # 9. Clone official Khronos OpenCL-Headers
