@@ -492,7 +492,8 @@ jobs:
                       }
                   }
           """
-          s = s[:start] + new_block + s[end:]
+          # Preserve the enclosing output-stream scope brace that is outside the replaced filter block.
+          s = s[:start] + new_block + "\n    }" + s[end:]
           for removed in ("c->ch_layouts", "c->pix_fmts", "c->sample_fmts", "c->supported_samplerates"):
               if removed in s:
                   raise SystemExit(f"ERROR: legacy AVCodec config access remains: {removed}")
